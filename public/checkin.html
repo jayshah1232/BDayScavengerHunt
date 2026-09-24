@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Check in — Scavenger Hunt</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">TAG DETECTED</div>
+    <h1>You found it!</h1>
+  </div>
+
+  <section id="screen-loading" class="card">
+    <p class="muted">Checking you in…</p>
+  </section>
+
+  <section id="screen-question" class="card hidden">
+    <h2>One more thing</h2>
+    <p id="question-text"></p>
+    <label for="answer-input">Your answer</label>
+    <input type="text" id="answer-input" autocomplete="off">
+    <div class="error-text hidden" id="answer-error"></div>
+    <button class="btn-primary" id="answer-submit">Submit</button>
+  </section>
+
+  <section id="screen-success" class="card hidden">
+    <div class="finish-banner">
+      <div class="display">✅ Checked in!</div>
+      <p class="muted">Your next hint is waiting in the app.</p>
+      <button class="btn-primary" id="back-to-hunt">Back to the hunt</button>
+    </div>
+  </section>
+
+  <section id="screen-error" class="card hidden">
+    <h2>Hmm</h2>
+    <p class="muted" id="error-text">Something didn't line up.</p>
+    <button class="btn-secondary" id="error-back">Back to the hunt</button>
+  </section>
+</div>
+
+<script src="/js/checkin.js"></script>
+</body>
+</html>

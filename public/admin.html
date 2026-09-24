@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Admin — Scavenger Hunt</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">MISSION CONTROL</div>
+    <h1>Admin</h1>
+  </div>
+
+  <!-- GATE -->
+  <section id="screen-gate" class="card">
+    <h2>Before you begin</h2>
+    <p class="muted" id="gate-question">Loading question…</p>
+    <label for="gate-answer">Your answer</label>
+    <input type="text" id="gate-answer" autocomplete="off">
+    <div class="error-text hidden" id="gate-error"></div>
+    <button class="btn-primary" id="gate-submit">Continue</button>
+  </section>
+
+  <!-- ADMIN LOGIN -->
+  <section id="screen-login" class="card hidden">
+    <h2>Admin login</h2>
+    <label for="admin-password">Password</label>
+    <input type="password" id="admin-password" autocomplete="off">
+    <div class="error-text hidden" id="login-error"></div>
+    <button class="btn-primary" id="login-submit">Log in</button>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="screen-dashboard" class="hidden">
+
+    <div class="card" id="lobby-card">
+      <h2 style="margin-bottom:6px;">Lobby</h2>
+      <p class="muted" id="lobby-mode-text"></p>
+      <div id="unassigned-area"></div>
+      <button class="btn-primary hidden" id="start-hunt-btn" style="margin-top:14px;">Start the hunt</button>
+      <p class="muted hidden" id="cant-start-note" style="margin-top:10px;">Each team needs at least one member and at least one location configured before you can start.</p>
+      <label style="margin-top:14px;display:flex;align-items:center;gap:8px;font-weight:400;">
+        <input type="checkbox" id="leaderboard-toggle" style="width:auto;margin:0;">
+        Show players a shared leaderboard (rough progress only, no hints or photos)
+      </label>
+      <button class="btn-secondary" id="open-setup-btn" style="margin-top:14px;">⚙️ Game Setup</button>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:14px;">Team progress</h2>
+      <div id="teams-list"></div>
+      <a href="/api/admin/hint-sheet" target="_blank" class="muted" style="display:inline-block;margin-top:6px;">Open printable backup hint sheet →</a>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:14px;">Pending submissions <span id="pending-count" class="muted"></span></h2>
+      <div id="pending-list"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:14px;">Activity feed</h2>
+      <div id="activity-list"></div>
+    </div>
+
+    <button class="logout-link" id="logout-btn">Log out of admin</button>
+  </section>
+
+  <!-- SETUP -->
+  <section id="screen-setup" class="hidden">
+    <div class="card">
+      <h2 style="margin-bottom:4px;">Game Setup</h2>
+      <p class="muted hidden" id="setup-locked-note">The hunt has already started — settings are locked. Reset the game to make changes.</p>
+      <div id="setup-error" class="error-text hidden"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:14px;">Basics</h3>
+      <label for="setup-title">Game title</label>
+      <input type="text" id="setup-title">
+      <label for="setup-gate-question">Gate question</label>
+      <input type="text" id="setup-gate-question">
+      <label for="setup-gate-answer">Gate answer</label>
+      <input type="text" id="setup-gate-answer" placeholder="Leave blank to keep the current answer">
+      <label for="setup-admin-password">Admin password</label>
+      <input type="text" id="setup-admin-password" placeholder="Leave blank to keep the current password">
+    </div>
+
+    <div id="setup-teams"></div>
+
+    <div class="card">
+      <button class="btn-primary" id="setup-save-btn">Save Setup</button>
+      <p class="muted hidden error-text" id="setup-save-error" style="margin-top:10px;"></p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:6px;">Reset Game</h3>
+      <p class="muted">Clears all players, teams-in-progress, and submissions. Keeps your locations, teams, and passwords as configured above.</p>
+      <button class="btn-danger" id="setup-reset-btn" style="margin-top:10px;">Reset Game</button>
+    </div>
+
+    <button class="logout-link" id="setup-back-btn">← Back to dashboard</button>
+  </section>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

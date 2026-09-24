@@ -1,0 +1,207 @@
+const express = require('express');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const path = require('path');
+const fs = require('fs');
+const { fromBuffer } = require('file-type');
+const { db, getSetting, logActivity } = require('../db');
+const { requireGate, requirePlayer, requireTeam } = require('../middleware/auth');
+const { tryAutoPlace } = require('./game');
+
+const router = express.Router();
+
+const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const ALLOWED_IMAGE = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const ALLOWED_VIDEO = new Set(['video/mp4', 'video/quicktime', 'video/webm', 'video/3gpp']);
+const EXT_FOR = {
+  'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/heic': '.heic', 'image/heif': '.heif',
+  'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/3gpp': '.3gp',
+};
+
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 75);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: 1 },
+});
+
+function currentLocation(teamId, stageIndex) {
+  return db.prepare('SELECT * FROM locations WHERE team_id = ? AND stage_order = ?').get(teamId, stageIndex);
+}
+function totalLocations(teamId) {
+  return db.prepare('SELECT COUNT(*) AS c FROM locations WHERE team_id = ?').get(teamId).c;
+}
+
+// --- Join with a display name ---
+router.post('/join', requireGate, (req, res) => {
+  const { name } = req.body || {};
+  const clean = (name || '').trim().slice(0, 40);
+  if (!clean) return res.status(400).json({ error: 'name_required' });
+
+  const info = db.prepare('INSERT INTO players (name) VALUES (?)').run(clean);
+  req.session.playerId = info.lastInsertRowid;
+  req.session.playerName = clean;
+
+  const player = { id: info.lastInsertRowid, name: clean };
+  const placed = tryAutoPlace(player);
+  if (!placed) {
+    logActivity('join', `${clean} joined`);
+  }
+
+  req.app.get('io').emit('game-state-changed');
+  res.json({ ok: true, playerId: player.id, name: clean });
+});
+
+// --- Self-correct a name that didn't match the auto-assign roster. No admin
+// involved — this is the whole point of "no placements happening at game
+// time": a typo just gets fixed by the player themselves. ---
+router.post('/retry-name', requireGate, requirePlayer, (req, res) => {
+  const existing = db.prepare('SELECT * FROM players WHERE id = ?').get(req.session.playerId);
+  if (!existing) return res.status(401).json({ error: 'player_required' });
+  if (existing.team_id) return res.status(400).json({ error: 'already_on_a_team' });
+
+  const { name } = req.body || {};
+  const clean = (name || '').trim().slice(0, 40);
+  if (!clean) return res.status(400).json({ error: 'name_required' });
+
+  db.prepare('UPDATE players SET name = ? WHERE id = ?').run(clean, existing.id);
+  req.session.playerName = clean;
+
+  const placed = tryAutoPlace({ id: existing.id, name: clean });
+  if (!placed) logActivity('join', `${clean} tried again but still isn't on the roster.`);
+
+  req.app.get('io').emit('game-state-changed');
+  res.json({ ok: true, placed });
+});
+
+// --- Current game state for this player's team: hint, progress, submission status ---
+router.get('/state', requireGate, requirePlayer, (req, res) => {
+  const playerRow = db.prepare('SELECT team_id FROM players WHERE id = ?').get(req.session.playerId);
+  const teamId = playerRow ? playerRow.team_id : null;
+  let team = null;
+  let location = null;
+  let pendingCount = 0;
+  let lastRejected = null;
+  let hintUsed = false;
+  let total = 0;
+
+  if (teamId) {
+    team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
+    if (team) {
+      total = totalLocations(team.id);
+      const finished = team.current_stage >= total;
+      location = finished ? null : currentLocation(team.id, team.current_stage);
+      if (location) {
+        pendingCount = db.prepare(
+          `SELECT COUNT(*) AS c FROM submissions WHERE team_id = ? AND location_id = ? AND status = 'pending'`
+        ).get(team.id, location.id).c;
+        lastRejected = db.prepare(
+          `SELECT note FROM submissions WHERE team_id = ? AND location_id = ? AND status = 'rejected' ORDER BY id DESC LIMIT 1`
+        ).get(team.id, location.id);
+        hintUsed = !!db.prepare(
+          `SELECT 1 FROM hint_requests WHERE team_id = ? AND location_id = ?`
+        ).get(team.id, location.id);
+      }
+    }
+  }
+
+  res.json({
+    gameTitle: getSetting('game_title', 'Scavenger Hunt'),
+    gamePhase: getSetting('game_phase', 'lobby'),
+    playerName: req.session.playerName || null,
+    team: team ? { id: team.id, name: team.name } : null,
+    finished: team ? team.current_stage >= total : false,
+    progress: team ? team.current_stage : 0,
+    total,
+    location: location ? {
+      name: location.name,
+      hint: location.hint,
+      verificationType: location.verification_type,
+      hasBackupCode: !!location.nfc_backup_code,
+      hasExtraHint: !!location.extra_hint,
+      extraHint: hintUsed ? location.extra_hint : null,
+    } : null,
+    pendingCount,
+    lastRejectedNote: pendingCount > 0 ? null : (lastRejected ? (lastRejected.note || '') : null),
+  });
+});
+
+// --- Submit a photo or video for the team's current location ---
+router.post('/submit', requireGate, requirePlayer, requireTeam, upload.single('media'), async (req, res) => {
+  try {
+    const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.teamId);
+    if (!team) return res.status(400).json({ error: 'no_team' });
+
+    const total = totalLocations(team.id);
+    if (team.current_stage >= total) return res.status(400).json({ error: 'already_finished' });
+
+    const location = currentLocation(team.id, team.current_stage);
+    if (!location || location.verification_type !== 'media') return res.status(400).json({ error: 'wrong_verification_type' });
+
+    if (!req.file) return res.status(400).json({ error: 'media_required' });
+
+    const type = await fromBuffer(req.file.buffer);
+    let kind = null;
+    if (type && ALLOWED_IMAGE.has(type.mime)) kind = 'image';
+    else if (type && ALLOWED_VIDEO.has(type.mime)) kind = 'video';
+    if (!kind) return res.status(400).json({ error: 'invalid_media' });
+
+    const filename = `${uuidv4()}${EXT_FOR[type.mime]}`;
+    fs.writeFileSync(path.join(UPLOAD_DIR, filename), req.file.buffer);
+
+    const info = db.prepare(
+      `INSERT INTO submissions (team_id, location_id, player_id, filename, media_kind, status)
+       VALUES (?, ?, ?, ?, ?, 'pending')`
+    ).run(team.id, location.id, req.session.playerId, filename, kind);
+
+    logActivity('submission', `${req.session.playerName} submitted a ${kind} for ${location.name}`, team.id);
+
+    const io = req.app.get('io');
+    io.to('admins').emit('new-submission', {
+      id: info.lastInsertRowid,
+      teamName: team.name,
+      locationName: location.name,
+      submittedBy: req.session.playerName,
+    });
+    io.to(`team-${team.id}`).emit('state-changed');
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('submit error', err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// --- View one's own team's approved media (used by the post-game recap gallery).
+// Only approved submissions, and only if it belongs to the requester's own team. ---
+router.get('/media/:submissionId', requireGate, requirePlayer, requireTeam, (req, res) => {
+  const sub = db.prepare(
+    `SELECT filename FROM submissions WHERE id = ? AND team_id = ? AND status = 'approved'`
+  ).get(req.params.submissionId, req.teamId);
+  if (!sub) return res.status(404).end();
+  res.sendFile(sub.filename, { root: UPLOAD_DIR });
+});
+
+// --- Reveal (and record) the elective extra hint for the team's current
+// location. One per team per location — calling it again just re-returns
+// the same hint without counting a second time. ---
+router.post('/hint', requireGate, requirePlayer, requireTeam, (req, res) => {
+  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.teamId);
+  const total = totalLocations(req.teamId);
+  if (!team || team.current_stage >= total) return res.status(400).json({ error: 'no_active_location' });
+
+  const location = currentLocation(team.id, team.current_stage);
+  if (!location || !location.extra_hint) return res.status(404).json({ error: 'no_extra_hint' });
+
+  const already = db.prepare('SELECT 1 FROM hint_requests WHERE team_id = ? AND location_id = ?').get(team.id, location.id);
+  if (!already) {
+    db.prepare('INSERT INTO hint_requests (team_id, location_id) VALUES (?, ?)').run(team.id, location.id);
+    logActivity('hint', `${team.name} used the extra hint for ${location.name}`, team.id);
+    req.app.get('io').to('admins').emit('admin-activity');
+  }
+
+  res.json({ ok: true, hint: location.extra_hint });
+});
+
+module.exports = router;
