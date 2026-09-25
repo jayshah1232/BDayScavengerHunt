@@ -1,27 +1,22 @@
 # Scavenger Hunt
 
-Self-hosted, real-time scavenger hunt for two teams — captain drafts or auto-assigned rosters, NFC tag or photo/video check-ins, and live admin review.
+Self-hosted, real-time scavenger hunt for two teams — admin-assigned rosters, a guess-the-spot-then-do-a-task flow at each location, and live admin review.
 
 ## How it works
 
 **One shared link, one game.** Everyone who opens the link joins the same session automatically — there's no "create a game" step. Not everyone has to join; the app just needs at least one person per team before you can start.
 
-**Teams: whoever picks first, for everyone.** The first person to tap either "Draft with captains" or "Let the app assign teams" locks that choice in for the whole group — nobody can back out and pick the other option afterward.
-
-- **Draft mode**: you name two captains ahead of time. When they join the link (by typing their name), they're automatically recognized and become captains. Everyone else lands in a pool. Captains take turns picking players onto their team, live, in the app. If a captain never shows up, you (the admin) can promote a stand-in from the pool so the draft isn't stuck.
-- **Auto-assign mode**: you pre-load a roster (who goes on which team) during setup. As people join with matching names, they're placed automatically — instantly, with nothing for you to do live. If someone's name doesn't match, they get a friendly prompt to double-check their spelling and try again themselves; there's no admin placement step to worry about mid-event.
+**Teams are entirely admin-assigned.** There's no drafting or self-picking — you build each team's roster (who's on it) on the Setup page ahead of time. As people join with matching names, they're placed onto their team automatically, instantly, with nothing for you to do live. If someone's name doesn't match the roster, they get a friendly prompt to double-check their spelling and try again themselves; there's no admin placement step to worry about mid-event.
 
 **Each team has its own separate set of locations.** Team A and Team B don't have to visit the same places, in the same order, or even the same *number* of stops — you build two independent lists on the Setup page. This also means one team can finish before the other; the hunt only fully ends once both are done.
 
-**Hints, one team-wide step at a time.** Everyone on a team sees the same hint at the same time. The moment *any* teammate's proof is approved (or *any* teammate taps the right NFC tag), the whole team's screens update automatically — first one to finish moves everyone forward. If two teammates both submit around the same time, whichever gets approved first wins; the other becomes moot automatically so you're not stuck reviewing duplicates.
+**Every location is guess-it-then-do-it.** Players first see a clue (e.g. "Tallest building in the city") and type in a guess for what the location is. Guesses are matched case-insensitively and ignore filler words like "the," so "CN Tower," "the CN tower," and "cn tower" all count — you can also list several accepted phrasings per location, separated by `|`. Once a team guesses correctly, the actual task appears (e.g. "Go to the base of the building and take a picture with the whole team") along with the photo/video upload — you approve or reject each submission (with a note) from the admin dashboard.
 
-**Two ways to verify a location**, configured per-location during setup:
-- **Photo/video**: a player submits proof from their phone; you approve or reject it (with a note) from the admin dashboard.
-- **NFC tag**: you place a rewritable NFC sticker at the location. Tapping it opens a page that instantly checks the team in — no admin needed — and can optionally ask a short question first (auto-graded). Every NFC location also has a manual backup code players can type in the app if a tag is missing, broken, or their phone won't read it.
+**Hints, one team-wide step at a time.** Everyone on a team sees the same clue and task at the same time. The moment *any* teammate guesses right, or *any* teammate's photo/video is approved, the whole team's screens update automatically — first one to finish moves everyone forward. If two teammates both submit around the same time, whichever gets approved first wins; the other becomes moot automatically so you're not stuck reviewing duplicates.
 
 **Backups for when tech fails**, since this all runs on your server on event day:
-- **Manual advance button**: on the admin dashboard, you can push any team to the next hint without a submission at all — useful if someone just sends their proof straight into your WhatsApp group instead of fighting a slow upload.
-- **Printable hint sheet**: open `/api/admin/hint-sheet` (linked from the dashboard) on a laptop and print it before the event — every hint, backup code, and answer, in order, in case the server goes down and you need to run things manually via the group chat for a bit.
+- **Manual advance button**: on the admin dashboard, you can push any team straight to the next location without a guess or a submission at all — useful if someone just sends their proof straight into your WhatsApp group instead of fighting a slow upload.
+- **Printable hint sheet**: open `/api/admin/hint-sheet` (linked from the dashboard) on a laptop and print it before the event — every clue, accepted guess, and task, in order, in case the server goes down and you need to run things manually via the group chat for a bit.
 
 ## Requirements
 
@@ -51,15 +46,17 @@ npm run setup
 
 It walks you through:
 1. The gate question/answer and your admin password
-2. Team names and captain names (captains only matter if the group ends up choosing draft mode — set them either way)
-3. An optional pre-set roster, for if the group chooses auto-assign mode instead
-4. One placeholder location per team, just so the game has something valid to start with
+2. Team names and each team's roster (who's on it — this is the only way players end up on a team)
+3. One placeholder location per team, just so the game has something valid to start with
 
 **For the actual locations, use the web Setup page instead** — it's much faster than typing them into the terminal one field at a time. Log into `/admin`, then click **⚙️ Game Setup** on the dashboard. Each team has its own independent location list on this page — they don't need to match in count, order, or content. From there you can:
+
+If you already know your full location list (names and order) but haven't written the clues/tasks yet, `npm run seed-locations` will pre-load `scripts/seed-locations.js`'s two lists — names and accepted guesses only — so you can fill in just the hint and task text on the Setup page afterward. Edit that file's two arrays to change the lists; it always requires the two teams to already exist (`npm run setup`) and replaces every location, so only run it before you've built out real hints/tasks.
+
 - Add, remove, and reorder each team's locations independently with buttons (no need to re-run anything from the terminal)
-- Pick **Photo/video** or **NFC tag** per location with a radio button — the NFC fields (backup code, question, answer) only show up when you pick NFC
+- Set the location's name, the clue shown before guessing, the accepted guess(es), and the task shown once they guess right — see below
 - Set an optional **elective hint** per location — see below
-- Edit team names, captains, and the auto-assign roster
+- Edit team names and the roster
 - Update the gate question/answer or admin password any time (leave a field blank to keep it unchanged)
 - **Reset Game** — clears all players and progress for a fresh test run, without touching your locations or settings
 
@@ -78,21 +75,6 @@ By default it listens on `127.0.0.1:3000` only — see deployment below to actua
 Any location can have one optional extra hint, set in the Setup page. If a team gets stuck, they'll see a "Need an extra hint?" button — tapping it reveals the hint immediately (no admin involved) and is recorded permanently for that team at that location. It only counts once per team per location, no matter how many times they look back at it.
 
 You'll see a running hint count per team on the dashboard, and the full breakdown (which locations, how many total) shows up in each team's post-game recap — useful if you want to factor "did they need help" into however you end up deciding a winner beyond just finish time.
-
-## Setting up the NFC tags
-
-If you used any NFC locations, setup prints a URL for each one, like:
-
-```
-Secret Garden: https://YOUR-DOMAIN/checkin.html?token=old-clocktower-a1b2c3
-```
-
-Swap in your real domain, then write that exact URL onto the tag using any generic NFC-writing app (e.g. "NFC Tools" on Android/iOS) — a plain URL/NDEF record, no special format needed. When someone taps the tag, their phone opens that page, which checks their team in automatically.
-
-A few notes:
-- Rewritable tags mean you can relocate/reuse them for a future hunt — just re-run setup (which generates fresh tokens) and rewrite the tags.
-- Some phones (especially iPhones without background tag reading enabled) need the tag held against the *top* of the phone for a second, not just tapped quickly. Mention this to players, and lean on the backup code for anyone whose phone won't cooperate.
-- The backup code always works as a manual substitute for tapping — it's in the app on the hint screen for any NFC-type location.
 
 ## Deployment & security
 
@@ -206,9 +188,9 @@ npm run setup
 npm start
 ```
 
-Open `http://localhost:3000` in a few different browser profiles/incognito windows to simulate different players (try both a draft-mode run and an auto-assign run), and `http://localhost:3000/admin` in another. Set `NODE_ENV=production` only once you've got the real deployment behind HTTPS running (see Deployment above and Troubleshooting below) — cookies won't survive over plain HTTP once that's set.
+Open `http://localhost:3000` in a few different browser profiles/incognito windows to simulate different players (make sure their names match the roster you set up), and `http://localhost:3000/admin` in another. Set `NODE_ENV=production` only once you've got the real deployment behind HTTPS running (see Deployment above and Troubleshooting below) — cookies won't survive over plain HTTP once that's set.
 
-Do at least one full dry run with 3-4 real people on real phones before the event — NFC tag reading in particular varies a lot by phone model, and it's much better to discover that beforehand.
+Do at least one full dry run with 3-4 real people on real phones before the event — it's much better to catch any confusing clues or fussy guess-matching beforehand.
 
 ## Troubleshooting
 

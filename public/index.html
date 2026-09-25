@@ -9,86 +9,50 @@
 <body>
 <div class="wrap">
   <div class="masthead">
-    <div class="eyebrow">FIELD EDITION</div>
+    <div class="eyebrow">OUT HERE IN THE 6</div>
     <h1 id="game-title">Scavenger Hunt</h1>
   </div>
 
   <!-- GATE -->
   <section id="screen-gate" class="card">
-    <h2>Before you begin</h2>
-    <p class="muted" id="gate-question">Loading question…</p>
+    <h2>Yo, hold up</h2>
+    <p class="muted" id="gate-question">Loading up…</p>
     <label for="gate-answer">Your answer</label>
     <input type="text" id="gate-answer" autocomplete="off">
     <div class="error-text hidden" id="gate-error"></div>
-    <button class="btn-primary" id="gate-submit">Continue</button>
+    <button class="btn-primary" id="gate-submit">Let's go</button>
   </section>
 
   <!-- JOIN (NAME) -->
   <section id="screen-join" class="card hidden">
-    <h2>What's your name?</h2>
-    <p class="muted">Use the name your friends know you by — it helps admins and your captain find you.</p>
+    <h2>Aight, who's this?</h2>
+    <p class="muted">Drop the name your friends actually call you — makes it way easier for us to find you on the roster.</p>
     <label for="player-name">Name</label>
     <input type="text" id="player-name" autocomplete="off" maxlength="40">
     <div class="error-text hidden" id="join-error"></div>
-    <button class="btn-primary" id="join-submit">Continue</button>
+    <button class="btn-primary" id="join-submit">I'm in</button>
   </section>
 
-  <!-- MODE CHOICE (first click for the whole group wins) -->
-  <section id="screen-mode-choice" class="card hidden">
-    <h2>How should teams be made?</h2>
-    <p class="muted">Whoever picks first locks it in for everyone — choose together!</p>
-    <button class="btn-primary" id="choose-draft" style="margin-bottom:10px;">Draft with captains</button>
-    <button class="btn-secondary" id="choose-auto">Let the app assign teams</button>
-  </section>
-
-  <!-- WAITING FOR CAPTAINS -->
-  <section id="screen-waiting-captains" class="card hidden">
-    <h2>Draft mode locked in!</h2>
-    <p class="muted" id="waiting-captains-text">Waiting for both captains to join…</p>
-  </section>
-
-  <!-- IN THE DRAFT POOL -->
-  <section id="screen-pool" class="card hidden">
-    <h2>You're in the pool 🎒</h2>
-    <p class="muted" id="pool-turn-text">Waiting to be picked…</p>
-    <div id="pool-teams"></div>
-  </section>
-
-  <!-- CAPTAIN: MAKE A PICK -->
-  <section id="screen-draft-board" class="card hidden">
-    <h2 id="draft-board-title">Your pick, captain!</h2>
-    <p class="muted">Tap a name to add them to your team.</p>
-    <div id="draft-pool-list"></div>
-    <div id="draft-teams" style="margin-top:16px;"></div>
-  </section>
-
-  <!-- OPEN TEAM PICK (auto-mode fallback / post-draft latecomers) -->
-  <section id="screen-open-pick" class="card hidden">
-    <h2>Pick your team</h2>
-    <p class="muted">Choose carefully — an admin has to move you if you misclick.</p>
-    <div id="open-team-list"></div>
-  </section>
-
-  <!-- NAME DIDN'T MATCH THE AUTO-ASSIGN ROSTER (self-serve fix, no admin involved) -->
+  <!-- NAME DIDN'T MATCH THE ROSTER (self-serve fix, no admin involved) -->
   <section id="screen-not-on-roster" class="card hidden">
-    <h2>Hmm, we can't find you</h2>
-    <p class="muted">Your name doesn't match anyone on either team's roster. Double-check it matches what your organizer gave you exactly — try a nickname or your full name.</p>
+    <h2>Yo, we can't find you</h2>
+    <p class="muted">Your name's not matching anyone on the roster, bud. Double-check it's exactly what the organizer gave you — try your full name or whatever nickname they've got down.</p>
     <label for="retry-name-input">Try a different name</label>
     <input type="text" id="retry-name-input" autocomplete="off" maxlength="40">
     <div class="error-text hidden" id="retry-name-error"></div>
-    <button class="btn-primary" id="retry-name-submit">Try again</button>
+    <button class="btn-primary" id="retry-name-submit">Run it back</button>
   </section>
 
   <!-- WAITING ROOM (has a team, hunt not started) -->
   <section id="screen-waiting-room" class="card hidden">
-    <h2>You're on <span id="wr-team-name">a team</span>!</h2>
+    <h2>You're locked in with <span id="wr-team-name">a team</span>!</h2>
     <p class="muted" id="wr-roster"></p>
-    <label for="team-name-input">Name your team</label>
+    <label for="team-name-input">What's your squad's name?</label>
     <input type="text" id="team-name-input" autocomplete="off" maxlength="40">
     <div class="error-text hidden" id="team-name-error"></div>
-    <button class="btn-secondary" id="team-name-submit" style="margin-bottom:14px;">Save name</button>
-    <p class="muted">Hang tight — the hunt starts when the admin gives the word.</p>
-    <button class="btn-secondary hidden" id="wr-leaderboard-link" style="margin-top:10px;">View leaderboard</button>
+    <button class="btn-secondary" id="team-name-submit" style="margin-bottom:14px;">Save it</button>
+    <p class="muted">Chill for now — the hunt kicks off the second the admin says go.</p>
+    <button class="btn-secondary hidden" id="wr-leaderboard-link" style="margin-top:10px;">Peep the standings</button>
   </section>
 
   <!-- OPT-IN SHARED LEADERBOARD (rough progress only, no hints/photos) -->
@@ -103,53 +67,50 @@
     <div class="card">
       <div class="trail-label" id="trail-label"></div>
       <div class="trail" id="trail"></div>
-      <button class="btn-secondary hidden" id="game-leaderboard-link" style="margin-bottom:14px;">View leaderboard</button>
+      <button class="btn-secondary hidden" id="game-leaderboard-link" style="margin-bottom:14px;">Peep the standings</button>
 
       <div id="finished-view" class="finish-banner hidden">
-        <div class="display">🏁 Hunt complete!</div>
-        <p class="muted" id="finished-note">Your team found every location. Head back to base and celebrate.</p>
+        <div class="display">🏁 That's a wrap!</div>
+        <p class="muted" id="finished-note">Your squad hit every spot on the list. Head back to base and celebrate — you earned it.</p>
       </div>
 
-      <div id="active-view">        <div class="hint-box">
-          <div class="loc-name" id="loc-name">LOCATION</div>
-          <div class="hint-text" id="hint-text">Loading hint…</div>
+      <div id="active-view">
+        <div class="hint-box">
+          <div class="loc-name" id="loc-name">SPOT</div>
+          <div class="hint-text" id="hint-text">Loading the clue…</div>
         </div>
 
         <div id="extra-hint-area" class="hidden">
-          <button class="btn-secondary hidden" id="extra-hint-btn" style="margin-bottom:14px;">Need an extra hint?</button>
+          <button class="btn-secondary hidden" id="extra-hint-btn" style="margin-bottom:14px;">Stuck? Grab a hint</button>
           <p class="muted hidden" id="extra-hint-text" style="margin-bottom:14px;"></p>
         </div>
 
-        <div id="status-area"></div>
-
-        <!-- MEDIA submission UI -->
-        <div id="media-area" class="hidden">
-          <label class="photo-picker" id="photo-picker">
-            <span id="photo-picker-text">Tap to take or choose a photo/video</span>
-            <img id="photo-preview" class="hidden">
-            <input type="file" accept="image/*,video/*" capture="environment" id="photo-input">
-          </label>
-          <div class="error-text hidden" id="submit-error"></div>
-          <button class="btn-primary" id="submit-btn" disabled>Submit for review</button>
-          <p class="muted" style="margin-top:10px;font-size:0.82rem;">Uploads slow or stuck? Send it in the WhatsApp group instead and ask an admin to push you through.</p>
+        <!-- GUESSING PHASE: guess the spot from the clue -->
+        <div id="guess-area" class="hidden">
+          <label for="guess-input">Where you think this is, fam?</label>
+          <input type="text" id="guess-input" autocomplete="off">
+          <div class="error-text hidden" id="guess-error"></div>
+          <button class="btn-primary" id="guess-submit">Lock it in</button>
         </div>
 
-        <!-- NFC check-in UI -->
-        <div id="nfc-area" class="hidden">
-          <p>Find the tagged sticker at this location and tap it with your phone.</p>
-          <button class="btn-secondary" id="nfc-code-toggle" style="margin-bottom:10px;">Tag missing or not working? Enter the backup code</button>
-          <div id="nfc-code-form" class="hidden">
-            <label for="nfc-code-input">Backup code</label>
-            <input type="text" id="nfc-code-input" autocomplete="off">
-            <div class="error-text hidden" id="nfc-code-error"></div>
-            <button class="btn-primary" id="nfc-code-submit">Check in</button>
+        <!-- TASK PHASE: guessed right, now do the task and submit proof -->
+        <div id="task-area" class="hidden">
+          <div class="hint-box task-box">
+            <div class="loc-name" id="task-loc-name"></div>
+            <div class="hint-text" id="task-text"></div>
           </div>
-          <div id="nfc-question-area" class="hidden">
-            <p class="hint-text" style="color:var(--charcoal);" id="nfc-question-text"></p>
-            <label for="nfc-answer-input">Your answer</label>
-            <input type="text" id="nfc-answer-input" autocomplete="off">
-            <div class="error-text hidden" id="nfc-answer-error"></div>
-            <button class="btn-primary" id="nfc-answer-submit">Submit answer</button>
+
+          <div id="status-area"></div>
+
+          <div id="media-area">
+            <label class="photo-picker" id="photo-picker">
+              <span id="photo-picker-text">Tap to snap or grab a pic/video</span>
+              <img id="photo-preview" class="hidden">
+              <input type="file" accept="image/*,video/*" capture="environment" id="photo-input">
+            </label>
+            <div class="error-text hidden" id="submit-error"></div>
+            <button class="btn-primary" id="submit-btn" disabled>Send it in</button>
+            <p class="muted" style="margin-top:10px;font-size:0.82rem;">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
           </div>
         </div>
       </div>
@@ -161,7 +122,7 @@
     <h2 id="recap-title">Recap</h2>
     <p class="muted" id="recap-summary"></p>
     <div id="recap-splits"></div>
-    <h3 style="margin-top:16px;">Photos &amp; videos</h3>
+    <h3 style="margin-top:16px;">Pics &amp; vids</h3>
     <div id="recap-media"></div>
   </section>
 </div>

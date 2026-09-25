@@ -1,6 +1,5 @@
 const express = require('express');
 const path = require('path');
-const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
 const { db, getSetting, setSetting, logActivity, advanceTeamStage, minutesSinceLastPlayerActivity, resetGameProgress } = require('../db');
@@ -42,18 +41,21 @@ router.post('/logout', requireGate, (req, res) => {
 router.get('/overview', requireGate, requireAdmin, (req, res) => {
   const teams = db.prepare('SELECT * FROM teams ORDER BY id').all().map((t) => {
     const total = db.prepare('SELECT COUNT(*) AS c FROM locations WHERE team_id = ?').get(t.id).c;
+    const currentLocation = t.current_stage < total
+      ? db.prepare('SELECT id, name FROM locations WHERE team_id = ? AND stage_order = ?').get(t.id, t.current_stage)
+      : null;
+    const currentPhase = currentLocation
+      ? (db.prepare('SELECT 1 FROM location_guesses WHERE team_id = ? AND location_id = ?').get(t.id, currentLocation.id) ? 'task' : 'guessing')
+      : null;
     return {
       id: t.id,
       name: t.name,
-      captainName: t.captain_name,
-      captainJoined: !!t.captain_player_id,
       progress: t.current_stage,
       total,
       finished: total > 0 && t.current_stage >= total,
-      currentLocation: t.current_stage < total
-        ? db.prepare('SELECT name, verification_type FROM locations WHERE team_id = ? AND stage_order = ?').get(t.id, t.current_stage)
-        : null,
-      members: db.prepare('SELECT id, name, is_captain FROM players WHERE team_id = ? ORDER BY is_captain DESC, name ASC').all(t.id),
+      currentLocation,
+      currentPhase,
+      members: db.prepare('SELECT id, name FROM players WHERE team_id = ? ORDER BY name ASC').all(t.id),
       quietMinutes: (getSetting('game_phase') === 'active' && t.current_stage < total)
         ? minutesSinceLastPlayerActivity(t.id) : null,
       hintsUsed: db.prepare('SELECT COUNT(*) AS c FROM hint_requests WHERE team_id = ?').get(t.id).c,
@@ -83,11 +85,9 @@ router.get('/overview', requireGate, requireAdmin, (req, res) => {
 
   res.json({
     gamePhase: getSetting('game_phase', 'lobby'),
-    teamMode: getSetting('team_mode'),
-    draftComplete: getSetting('draft_complete') === '1',
     leaderboardEnabled: getSetting('leaderboard_enabled') === '1',
     teams,
-    // Informational only — auto-assign rosters are hardcoded ahead of time,
+    // Informational only — rosters are set ahead of time on the Setup page,
     // so there's no live "place this player" action for the admin to take.
     // A name showing up here just means it didn't match the roster; the
     // player fixes it themselves from their own screen.
@@ -148,31 +148,10 @@ router.post('/start-hunt', requireGate, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// Rescue path for a no-show captain: promote any joined (unassigned) player
-// to captain of the given team so a draft can still proceed.
-router.post('/force-captain', requireGate, requireAdmin, (req, res) => {
-  const { playerId, teamId } = req.body || {};
-  const player = db.prepare('SELECT * FROM players WHERE id = ? AND team_id IS NULL').get(playerId);
-  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
-  if (!player || !team) return res.status(400).json({ error: 'invalid' });
-
-  db.prepare('UPDATE teams SET captain_player_id = ? WHERE id = ?').run(player.id, team.id);
-  db.prepare('UPDATE players SET team_id = ?, is_captain = 1 WHERE id = ?').run(team.id, player.id);
-  logActivity('admin', `Admin made ${player.name} stand-in captain of ${team.name}`, team.id);
-
-  const teamsNow = db.prepare('SELECT * FROM teams ORDER BY id').all();
-  if (teamsNow.every((t) => t.captain_player_id) && !getSetting('draft_current_turn_team_id')) {
-    setSetting('draft_current_turn_team_id', String(teamsNow[0].id));
-    logActivity('draft', 'Both captains are in — the draft can begin.');
-  }
-
-  broadcastGame(req);
-  res.json({ ok: true });
-});
-
 // Manual stage advance — the WhatsApp/slow-upload backup path: if a team
 // sends their proof straight to the group chat instead of the app, push
-// them forward here without needing a matching submission row.
+// them forward here without needing a matching submission row (skips both
+// the guess step and the task for that location).
 router.post('/advance-team', requireGate, requireAdmin, (req, res) => {
   const { teamId, note } = req.body || {};
   const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
@@ -208,14 +187,14 @@ router.get('/hint-sheet', requireGate, requireAdmin, (req, res) => {
         <td>${i + 1}</td>
         <td>${escapeHtml(l.name)}</td>
         <td>${escapeHtml(l.hint)}</td>
-        <td>${l.verification_type}</td>
-        <td>${l.verification_type === 'nfc' ? `Backup code: ${escapeHtml(l.nfc_backup_code || '—')}<br>Question: ${escapeHtml(l.nfc_question || '(none — tap only)')}<br>Answer: ${escapeHtml(l.nfc_answer || '—')}` : '(review submitted photo/video)'}</td>
+        <td>${escapeHtml(l.guess_answer || '—')}</td>
+        <td>${escapeHtml(l.task || '—')}</td>
         <td>${escapeHtml(l.admin_note || '')}</td>
         <td>${escapeHtml(l.extra_hint || '—')}</td>
       </tr>`).join('');
     return `
       <h2>${escapeHtml(team.name)}</h2>
-      <table><thead><tr><th>#</th><th>Location</th><th>Hint</th><th>Type</th><th>Verification details</th><th>Admin note</th><th>Extra hint</th></tr></thead>
+      <table><thead><tr><th>#</th><th>Location</th><th>Hint</th><th>Accepted guesses</th><th>Task</th><th>Admin note</th><th>Extra hint</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="7">No locations configured</td></tr>'}</tbody></table>`;
   }).join('');
 
@@ -237,10 +216,6 @@ function escapeHtml(str) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function slugify(str) {
-  return (str || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-}
-
 // ---- Setup page: load current configuration for editing ----
 router.get('/setup', requireGate, requireAdmin, (req, res) => {
   const teams = db.prepare('SELECT * FROM teams ORDER BY id').all();
@@ -260,17 +235,13 @@ router.get('/setup', requireGate, requireAdmin, (req, res) => {
     hasAdminPassword: !!getSetting('admin_password_hash'),
     teams: teams.map((t) => ({
       name: t.name,
-      captainName: t.captain_name || '',
       rosterNames: (rosterByTeam[t.id] || []).join(', '),
       locations: db.prepare('SELECT * FROM locations WHERE team_id = ? ORDER BY stage_order ASC').all(t.id).map((l) => ({
         name: l.name,
         hint: l.hint,
+        guessAnswer: l.guess_answer || '',
+        task: l.task || '',
         adminNote: l.admin_note || '',
-        verificationType: l.verification_type,
-        nfcToken: l.nfc_token || '',
-        nfcBackupCode: l.nfc_backup_code || '',
-        nfcQuestion: l.nfc_question || '',
-        nfcAnswer: l.nfc_answer || '',
         extraHint: l.extra_hint || '',
       })),
     })),
@@ -306,13 +277,12 @@ router.post('/setup', requireGate, requireAdmin, (req, res) => {
   const rosterMap = {};
   const teamIds = teams.map((t, i) => {
     const name = (t.name || `Team ${i + 1}`).trim().slice(0, 40);
-    const captainName = (t.captainName || '').trim().slice(0, 40) || null;
     let teamId;
     if (existingTeams[i]) {
       teamId = existingTeams[i].id;
-      db.prepare('UPDATE teams SET name = ?, captain_name = ? WHERE id = ?').run(name, captainName, teamId);
+      db.prepare('UPDATE teams SET name = ? WHERE id = ?').run(name, teamId);
     } else {
-      teamId = db.prepare('INSERT INTO teams (name, captain_name) VALUES (?, ?)').run(name, captainName).lastInsertRowid;
+      teamId = db.prepare('INSERT INTO teams (name) VALUES (?)').run(name).lastInsertRowid;
     }
     (t.rosterNames || '').split(',').map((n) => n.trim()).filter(Boolean).forEach((n) => {
       rosterMap[n.toLowerCase()] = teamId;
@@ -326,28 +296,22 @@ router.post('/setup', requireGate, requireAdmin, (req, res) => {
   db.prepare('DELETE FROM hint_requests').run();
   db.prepare('DELETE FROM stage_completions').run();
   db.prepare('DELETE FROM submissions').run();
+  db.prepare('DELETE FROM location_guesses').run();
   db.prepare('DELETE FROM locations').run();
   const insertLoc = db.prepare(`
-    INSERT INTO locations (team_id, stage_order, name, hint, admin_note, verification_type, nfc_token, nfc_backup_code, nfc_question, nfc_answer, extra_hint)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO locations (team_id, stage_order, name, hint, guess_answer, task, admin_note, extra_hint)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   teams.forEach((t, teamIndex) => {
     const teamId = teamIds[teamIndex];
     t.locations.forEach((l, i) => {
       const name = (l.name || `Location ${i + 1}`).trim().slice(0, 60);
       const hint = (l.hint || '').trim().slice(0, 500);
+      const guessAnswer = (l.guessAnswer || '').trim().slice(0, 300);
+      const task = (l.task || '').trim().slice(0, 500);
       const adminNote = (l.adminNote || '').trim().slice(0, 500) || null;
       const extraHint = (l.extraHint || '').trim().slice(0, 500) || null;
-      const isNfc = l.verificationType === 'nfc';
-      if (isNfc) {
-        const token = (l.nfcToken || '').trim() || `${slugify(name)}-${crypto.randomBytes(3).toString('hex')}`;
-        const backupCode = (l.nfcBackupCode || '').trim().slice(0, 40) || crypto.randomBytes(2).toString('hex');
-        const question = (l.nfcQuestion || '').trim().slice(0, 300) || null;
-        const answer = (l.nfcAnswer || '').trim().slice(0, 300) || null;
-        insertLoc.run(teamId, i, name, hint, adminNote, 'nfc', token, backupCode, question, answer, extraHint);
-      } else {
-        insertLoc.run(teamId, i, name, hint, adminNote, 'media', null, null, null, null, extraHint);
-      }
+      insertLoc.run(teamId, i, name, hint, guessAnswer, task, adminNote, extraHint);
     });
   });
 

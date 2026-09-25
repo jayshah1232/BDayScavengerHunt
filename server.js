@@ -100,9 +100,9 @@ function syncRooms(socket) {
   if (!session) return;
   if (session.isAdmin) socket.join('admins');
   if (session.playerId) {
-    // Team assignment can happen via someone else's action (a captain's pick,
-    // an admin placement) after this socket first connected — always
-    // re-resolve from the players table rather than trusting session state.
+    // Team assignment can happen after this socket first connected (a roster
+    // match on join) — always re-resolve from the players table rather than
+    // trusting session state.
     const player = db.prepare('SELECT team_id FROM players WHERE id = ?').get(session.playerId);
     if (player && player.team_id) socket.join(`team-${player.team_id}`);
   }
