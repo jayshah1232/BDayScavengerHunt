@@ -4,3 +4,4 @@ data/
 uploads/
 npm-debug.log*
 .DS_Store
+deploy.sh
