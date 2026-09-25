@@ -32,6 +32,9 @@ function currentLocation(teamId, stageIndex) {
 function totalLocations(teamId) {
   return db.prepare('SELECT COUNT(*) AS c FROM locations WHERE team_id = ?').get(teamId).c;
 }
+function isGuessed(teamId, locationId) {
+  return !!db.prepare('SELECT 1 FROM location_guesses WHERE team_id = ? AND location_id = ?').get(teamId, locationId);
+}
 
 // --- Join with a display name ---
 router.post('/join', requireGate, (req, res) => {
@@ -44,18 +47,15 @@ router.post('/join', requireGate, (req, res) => {
   req.session.playerName = clean;
 
   const player = { id: info.lastInsertRowid, name: clean };
-  const placed = tryAutoPlace(player);
-  if (!placed) {
-    logActivity('join', `${clean} joined`);
-  }
+  tryAutoPlace(player);
 
   req.app.get('io').emit('game-state-changed');
   res.json({ ok: true, playerId: player.id, name: clean });
 });
 
-// --- Self-correct a name that didn't match the auto-assign roster. No admin
-// involved — this is the whole point of "no placements happening at game
-// time": a typo just gets fixed by the player themselves. ---
+// --- Self-correct a name that didn't match the roster. No admin involved —
+// this is the whole point of "no placements happening at game time": a typo
+// just gets fixed by the player themselves. ---
 router.post('/retry-name', requireGate, requirePlayer, (req, res) => {
   const existing = db.prepare('SELECT * FROM players WHERE id = ?').get(req.session.playerId);
   if (!existing) return res.status(401).json({ error: 'player_required' });
@@ -75,14 +75,15 @@ router.post('/retry-name', requireGate, requirePlayer, (req, res) => {
   res.json({ ok: true, placed });
 });
 
-// --- Current game state for this player's team: hint, progress, submission status ---
+// --- Current game state for this player's team: hint/guess or task, progress, submission status ---
 router.get('/state', requireGate, requirePlayer, (req, res) => {
   const playerRow = db.prepare('SELECT team_id FROM players WHERE id = ?').get(req.session.playerId);
   const teamId = playerRow ? playerRow.team_id : null;
   let team = null;
   let location = null;
+  let phase = null;
   let pendingCount = 0;
-  let lastRejected = null;
+  let lastRejectedNote = null;
   let hintUsed = false;
   let total = 0;
 
@@ -93,15 +94,20 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
       const finished = team.current_stage >= total;
       location = finished ? null : currentLocation(team.id, team.current_stage);
       if (location) {
-        pendingCount = db.prepare(
-          `SELECT COUNT(*) AS c FROM submissions WHERE team_id = ? AND location_id = ? AND status = 'pending'`
-        ).get(team.id, location.id).c;
-        lastRejected = db.prepare(
-          `SELECT note FROM submissions WHERE team_id = ? AND location_id = ? AND status = 'rejected' ORDER BY id DESC LIMIT 1`
-        ).get(team.id, location.id);
+        const guessed = isGuessed(team.id, location.id);
+        phase = guessed ? 'task' : 'guessing';
         hintUsed = !!db.prepare(
           `SELECT 1 FROM hint_requests WHERE team_id = ? AND location_id = ?`
         ).get(team.id, location.id);
+        if (guessed) {
+          pendingCount = db.prepare(
+            `SELECT COUNT(*) AS c FROM submissions WHERE team_id = ? AND location_id = ? AND status = 'pending'`
+          ).get(team.id, location.id).c;
+          const lastRejected = db.prepare(
+            `SELECT note FROM submissions WHERE team_id = ? AND location_id = ? AND status = 'rejected' ORDER BY id DESC LIMIT 1`
+          ).get(team.id, location.id);
+          lastRejectedNote = pendingCount > 0 ? null : (lastRejected ? (lastRejected.note || '') : null);
+        }
       }
     }
   }
@@ -114,20 +120,20 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
     finished: team ? team.current_stage >= total : false,
     progress: team ? team.current_stage : 0,
     total,
+    phase,
     location: location ? {
-      name: location.name,
       hint: location.hint,
-      verificationType: location.verification_type,
-      hasBackupCode: !!location.nfc_backup_code,
       hasExtraHint: !!location.extra_hint,
       extraHint: hintUsed ? location.extra_hint : null,
+      name: phase === 'task' ? location.name : null,
+      task: phase === 'task' ? location.task : null,
     } : null,
     pendingCount,
-    lastRejectedNote: pendingCount > 0 ? null : (lastRejected ? (lastRejected.note || '') : null),
+    lastRejectedNote,
   });
 });
 
-// --- Submit a photo or video for the team's current location ---
+// --- Submit a photo or video for the team's current location (only once it's been correctly guessed) ---
 router.post('/submit', requireGate, requirePlayer, requireTeam, upload.single('media'), async (req, res) => {
   try {
     const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.teamId);
@@ -137,7 +143,8 @@ router.post('/submit', requireGate, requirePlayer, requireTeam, upload.single('m
     if (team.current_stage >= total) return res.status(400).json({ error: 'already_finished' });
 
     const location = currentLocation(team.id, team.current_stage);
-    if (!location || location.verification_type !== 'media') return res.status(400).json({ error: 'wrong_verification_type' });
+    if (!location) return res.status(400).json({ error: 'no_active_location' });
+    if (!isGuessed(team.id, location.id)) return res.status(400).json({ error: 'not_guessed_yet' });
 
     if (!req.file) return res.status(400).json({ error: 'media_required' });
 

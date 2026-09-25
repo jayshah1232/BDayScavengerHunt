@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node scripts/setup.js",
+    "seed-locations": "node scripts/seed-locations.js",
     "reset-admin-password": "node scripts/reset-admin-password.js"
   },
   "engines": {

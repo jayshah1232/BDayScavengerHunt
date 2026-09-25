@@ -1,8 +1,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const ALL_SCREENS = [
-    'screen-gate', 'screen-join', 'screen-mode-choice', 'screen-waiting-captains',
-    'screen-pool', 'screen-draft-board', 'screen-open-pick', 'screen-not-on-roster',
+    'screen-gate', 'screen-join', 'screen-not-on-roster',
     'screen-waiting-room', 'screen-leaderboard', 'screen-game', 'screen-recap',
   ];
   function showOnly(id) {
@@ -67,7 +66,7 @@
       resolveScreen();
     } catch (e) {
       $('gate-error').textContent = e.data?.error === 'too_many_attempts'
-        ? 'Too many attempts — wait a bit and try again.' : "That's not it — try again.";
+        ? 'Whoa, slow down — too many tries. Chill for a sec and try again.' : "Nah, that's not it — try again.";
       $('gate-error').classList.remove('hidden');
     }
   });
@@ -76,39 +75,15 @@
   $('join-submit').addEventListener('click', async () => {
     $('join-error').classList.add('hidden');
     const name = $('player-name').value.trim();
-    if (!name) { $('join-error').textContent = 'Enter a name.'; $('join-error').classList.remove('hidden'); return; }
+    if (!name) { $('join-error').textContent = 'Drop a name first.'; $('join-error').classList.remove('hidden'); return; }
     try {
       await api('/api/player/join', { method: 'POST', body: JSON.stringify({ name }) });
       resolveScreen();
     } catch (e) {
-      $('join-error').textContent = 'Something went wrong — try again.';
+      $('join-error').textContent = 'Something glitched — try again.';
       $('join-error').classList.remove('hidden');
     }
   });
-
-  // ---- MODE CHOICE ----
-  $('choose-draft').addEventListener('click', () => chooseMode('draft'));
-  $('choose-auto').addEventListener('click', () => chooseMode('auto'));
-  async function chooseMode(mode) {
-    try {
-      await api('/api/game/team-mode', { method: 'POST', body: JSON.stringify({ mode }) });
-      resolveScreen();
-    } catch (e) { resolveScreen(); }
-  }
-
-  // ---- Shared team-roster renderer (used by pool + draft board) ----
-  function renderTeamsSummary(container, gs) {
-    container.innerHTML = '';
-    gs.teams.forEach((t) => {
-      const div = document.createElement('div');
-      div.className = 'admin-team-card';
-      const turnBadge = gs.draftCurrentTurnTeamId === t.id && !gs.draftComplete
-        ? ' <span class="status-pill status-pending">picking now</span>' : '';
-      div.innerHTML = `<div class="row"><h3>${escapeHtml(t.name)}${turnBadge}</h3><span class="muted">${t.memberCount} joined</span></div>
-        <p class="muted" style="margin-top:6px;">${t.members.map((m) => escapeHtml(m.name) + (m.is_captain ? ' (captain)' : '')).join(', ') || 'No one yet'}</p>`;
-      container.appendChild(div);
-    });
-  }
 
   let cachedLeaderboardEnabled = false;
 
@@ -126,109 +101,25 @@
     $('game-title').textContent = gs.gameTitle;
     cachedLeaderboardEnabled = !!gs.leaderboardEnabled;
 
-    // Captain, draft still open — always show the draft board regardless of team_id.
-    if (gs.teamMode === 'draft' && !gs.draftComplete && gs.me && gs.me.isCaptain) {
-      renderDraftBoard(gs);
-      return showOnly('screen-draft-board');
+    if (!gs.me) return showOnly('screen-join');
+
+    // No team yet — name didn't match anyone on the roster.
+    if (!gs.team) return showOnly('screen-not-on-roster');
+
+    if (gs.gamePhase === 'ended') return loadRecap();
+    if (gs.gamePhase === 'active') {
+      showOnly('screen-game');
+      return loadGameState();
     }
 
-    if (gs.me && gs.me.teamId) {
-      if (gs.gamePhase === 'ended') {
-        return loadRecap();
-      }
-      if (gs.gamePhase === 'active') {
-        showOnly('screen-game');
-        return loadGameState();
-      }
-      const myTeam = gs.teams.find((t) => t.id === gs.me.teamId);
-      $('wr-team-name').textContent = myTeam ? myTeam.name : 'a team';
-      $('wr-roster').textContent = myTeam
-        ? `Roster so far: ${myTeam.members.map((m) => m.name).join(', ')}`
-        : '';
-      if (myTeam) $('team-name-input').value = myTeam.name;
-      $('wr-leaderboard-link').classList.toggle('hidden', !cachedLeaderboardEnabled);
-      return showOnly('screen-waiting-room');
-    }
-
-    // No team yet.
-    if (!gs.teamMode) return showOnly('screen-mode-choice');
-
-    if (gs.teamMode === 'draft') {
-      if (gs.draftComplete) {
-        renderOpenPick(gs);
-        return showOnly('screen-open-pick');
-      }
-      const bothCaptainsIn = gs.teams.every((t) => t.captainJoined);
-      if (!bothCaptainsIn) {
-        const missing = gs.teams.filter((t) => !t.captainJoined).map((t) => t.captainName || t.name).join(', ');
-        $('waiting-captains-text').textContent = `Waiting on: ${missing}`;
-        return showOnly('screen-waiting-captains');
-      }
-      renderPool(gs);
-      return showOnly('screen-pool');
-    }
-
-    if (gs.teamMode === 'auto') {
-      return showOnly('screen-not-on-roster');
-    }
+    $('wr-team-name').textContent = gs.team.name;
+    $('wr-roster').textContent = `Roster so far: ${gs.team.members.map((m) => m.name).join(', ')}`;
+    $('team-name-input').value = gs.team.name;
+    $('wr-leaderboard-link').classList.toggle('hidden', !cachedLeaderboardEnabled);
+    return showOnly('screen-waiting-room');
   }
 
-  function renderPool(gs) {
-    const turnTeam = gs.teams.find((t) => t.id === gs.draftCurrentTurnTeamId);
-    $('pool-turn-text').textContent = turnTeam
-      ? `${turnTeam.captainName || turnTeam.name} is picking now…` : 'Waiting for the draft to start…';
-    renderTeamsSummary($('pool-teams'), gs);
-  }
-
-  function renderDraftBoard(gs) {
-    const myTeamId = gs.me.teamId;
-    const isMyTurn = gs.draftCurrentTurnTeamId === myTeamId;
-    $('draft-board-title').textContent = isMyTurn ? 'Your pick, captain!' : "Waiting on the other captain…";
-
-    const listEl = $('draft-pool-list');
-    listEl.innerHTML = '';
-    if (isMyTurn) {
-      if (gs.pool.length === 0) {
-        listEl.innerHTML = '<p class="muted">No one left to pick.</p>';
-      }
-      gs.pool.forEach((p) => {
-        const btn = document.createElement('button');
-        btn.className = 'team-option';
-        btn.innerHTML = `<span>${escapeHtml(p.name)}</span><span class="count">pick</span>`;
-        btn.addEventListener('click', async () => {
-          btn.disabled = true;
-          try {
-            await api('/api/game/draft-pick', { method: 'POST', body: JSON.stringify({ playerId: p.id }) });
-            resolveScreen();
-          } catch (e) { btn.disabled = false; }
-        });
-        listEl.appendChild(btn);
-      });
-    } else {
-      listEl.innerHTML = `<p class="muted">${gs.pool.length} player(s) still waiting to be picked.</p>`;
-    }
-    renderTeamsSummary($('draft-teams'), gs);
-  }
-
-  function renderOpenPick(gs) {
-    const list = $('open-team-list');
-    list.innerHTML = '';
-    gs.teams.forEach((t) => {
-      const btn = document.createElement('button');
-      btn.className = 'team-option';
-      btn.innerHTML = `<span>${escapeHtml(t.name)}</span><span class="count">${t.memberCount} joined</span>`;
-      btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        try {
-          await api('/api/game/join-team', { method: 'POST', body: JSON.stringify({ teamId: t.id }) });
-          resolveScreen();
-        } catch (e) { btn.disabled = false; }
-      });
-      list.appendChild(btn);
-    });
-  }
-
-  // ---- GAME (hint / media / nfc) ----
+  // ---- GAME (guess the spot, then complete the task) ----
   let selectedFile = null;
 
   async function loadGameState() {
@@ -247,7 +138,7 @@
       dot.className = 'dot' + (i < state.progress ? ' done' : i === state.progress ? ' current' : '');
       trail.appendChild(dot);
     }
-    $('trail-label').textContent = `${Math.min(state.progress, state.total)} of ${state.total} found`;
+    $('trail-label').textContent = `${Math.min(state.progress, state.total)} of ${state.total} bagged`;
 
     if (state.finished || !state.location) {
       $('active-view').classList.add('hidden');
@@ -257,7 +148,7 @@
     $('finished-view').classList.add('hidden');
     $('active-view').classList.remove('hidden');
 
-    $('loc-name').textContent = `LOCATION ${state.progress + 1} OF ${state.total}`;
+    $('loc-name').textContent = `SPOT ${state.progress + 1} OF ${state.total}`;
     $('hint-text').textContent = state.location.hint;
 
     if (state.location.hasExtraHint) {
@@ -274,6 +165,19 @@
       $('extra-hint-area').classList.add('hidden');
     }
 
+    const guessing = state.phase === 'guessing';
+    $('guess-area').classList.toggle('hidden', !guessing);
+    $('task-area').classList.toggle('hidden', guessing);
+
+    if (guessing) {
+      $('guess-input').value = '';
+      $('guess-error').classList.add('hidden');
+      return;
+    }
+
+    $('task-loc-name').textContent = `YOU FOUND IT: ${state.location.name}`;
+    $('task-text').textContent = state.location.task;
+
     const statusArea = $('status-area');
     statusArea.innerHTML = '';
     if (state.pendingCount > 0) {
@@ -283,26 +187,32 @@
       statusArea.innerHTML = `<div class="status-pill status-rejected">Rejected — ${note}. Try again!</div>`;
     }
 
-    const isMedia = state.location.verificationType === 'media';
-    $('media-area').classList.toggle('hidden', !isMedia);
-    $('nfc-area').classList.toggle('hidden', isMedia);
-
-    if (isMedia) {
-      resetPhotoPicker();
-      $('submit-btn').textContent = state.pendingCount > 0 ? 'Submit another attempt' : 'Submit for review';
-    } else {
-      $('nfc-code-form').classList.add('hidden');
-      $('nfc-question-area').classList.add('hidden');
-      $('nfc-code-error').classList.add('hidden');
-      $('nfc-code-input').value = '';
-    }
+    resetPhotoPicker();
+    $('submit-btn').textContent = state.pendingCount > 0 ? 'Send another attempt' : 'Send it in';
   }
+
+  // ---- GUESSING ----
+  $('guess-submit').addEventListener('click', async () => {
+    $('guess-error').classList.add('hidden');
+    const guess = $('guess-input').value.trim();
+    if (!guess) return;
+    $('guess-submit').disabled = true;
+    try {
+      await api('/api/game/guess', { method: 'POST', body: JSON.stringify({ guess }) });
+      await loadGameState();
+    } catch (e) {
+      $('guess-error').textContent = "Nah, not it — run it back.";
+      $('guess-error').classList.remove('hidden');
+    } finally {
+      $('guess-submit').disabled = false;
+    }
+  });
 
   function resetPhotoPicker() {
     selectedFile = null;
     $('photo-input').value = '';
     $('photo-preview').classList.add('hidden');
-    $('photo-picker-text').textContent = 'Tap to take or choose a photo/video';
+    $('photo-picker-text').textContent = 'Tap to snap or grab a pic/video';
     $('submit-btn').disabled = true;
     $('submit-error').classList.add('hidden');
   }
@@ -330,7 +240,7 @@
     $('submit-error').classList.add('hidden');
     $('submit-btn').disabled = true;
     const originalLabel = $('submit-btn').textContent;
-    $('submit-btn').textContent = 'Submitting…';
+    $('submit-btn').textContent = 'Sending…';
     try {
       const form = new FormData();
       form.append('media', selectedFile);
@@ -338,53 +248,11 @@
       await loadGameState();
     } catch (e) {
       $('submit-error').textContent = e.data?.error === 'invalid_media'
-        ? "That file doesn't look like a photo or video — try another."
-        : 'Could not submit — try again.';
+        ? "That's not a pic or video, bud — try again."
+        : "Didn't go through — try again.";
       $('submit-error').classList.remove('hidden');
       $('submit-btn').disabled = false;
       $('submit-btn').textContent = originalLabel;
-    }
-  });
-
-  // ---- NFC backup code + question flow (in-app fallback for broken/missing tags) ----
-  $('nfc-code-toggle').addEventListener('click', () => {
-    $('nfc-code-form').classList.toggle('hidden');
-  });
-
-  $('nfc-code-submit').addEventListener('click', async () => {
-    $('nfc-code-error').classList.add('hidden');
-    const code = $('nfc-code-input').value.trim();
-    if (!code) return;
-    try {
-      const result = await api('/api/game/checkin-code', { method: 'POST', body: JSON.stringify({ code }) });
-      handleCheckinResult(result);
-    } catch (e) {
-      $('nfc-code-error').textContent = 'That code doesn\u2019t match — double check and try again.';
-      $('nfc-code-error').classList.remove('hidden');
-    }
-  });
-
-  function handleCheckinResult(result) {
-    if (result.needsAnswer) {
-      $('nfc-question-text').textContent = result.question;
-      $('nfc-question-area').classList.remove('hidden');
-      $('nfc-code-form').classList.add('hidden');
-    } else if (result.advanced) {
-      loadGameState();
-    }
-  }
-
-  $('nfc-answer-submit').addEventListener('click', async () => {
-    $('nfc-answer-error').classList.add('hidden');
-    const answer = $('nfc-answer-input').value.trim();
-    if (!answer) return;
-    try {
-      await api('/api/game/checkin-answer', { method: 'POST', body: JSON.stringify({ answer }) });
-      $('nfc-answer-input').value = '';
-      await loadGameState();
-    } catch (e) {
-      $('nfc-answer-error').textContent = 'Not quite — try again.';
-      $('nfc-answer-error').classList.remove('hidden');
     }
   });
 
@@ -397,7 +265,7 @@
       await api('/api/player/retry-name', { method: 'POST', body: JSON.stringify({ name }) });
       resolveScreen();
     } catch (e) {
-      $('retry-name-error').textContent = 'Something went wrong — try again.';
+      $('retry-name-error').textContent = 'Something glitched — try again.';
       $('retry-name-error').classList.remove('hidden');
     }
   });
@@ -412,7 +280,7 @@
       resolveScreen();
     } catch (e) {
       $('team-name-error').textContent = e.data?.error === 'hunt_already_started'
-        ? 'The hunt has already started — team names are locked now.' : 'Could not save — try again.';
+        ? "Hunt's already poppin' off — team names are locked now." : "Didn't save — try again.";
       $('team-name-error').classList.remove('hidden');
     }
   });
@@ -453,7 +321,7 @@
 
       const others = data.allTeamFinishes.filter((t) => t.name !== data.teamName);
       const finishedOthers = others.filter((t) => t.finished && t.totalSeconds != null);
-      let summary = `Finished in ${formatDuration(data.totalSeconds)}, using ${data.hintsUsed} extra hint${data.hintsUsed === 1 ? '' : 's'}.`;
+      let summary = `You wrapped it up in ${formatDuration(data.totalSeconds)}, popping ${data.hintsUsed} extra hint${data.hintsUsed === 1 ? '' : 's'} along the way.`;
       if (finishedOthers.length && data.totalSeconds != null) {
         const diffs = finishedOthers.map((t) => `${t.name} in ${formatDuration(t.totalSeconds)} (${t.hintsUsed} hint${t.hintsUsed === 1 ? '' : 's'})`);
         summary += ` (${diffs.join(', ')})`;
@@ -472,7 +340,7 @@
       const mediaEl = $('recap-media');
       mediaEl.innerHTML = '';
       if (!data.media.length) {
-        mediaEl.innerHTML = '<p class="muted">No approved photos or videos.</p>';
+        mediaEl.innerHTML = '<p class="muted">No pics or vids got approved, unfortunately.</p>';
       }
       data.media.forEach((m) => {
         const el = document.createElement(m.media_kind === 'video' ? 'video' : 'img');

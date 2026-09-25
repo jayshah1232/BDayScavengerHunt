@@ -17,10 +17,6 @@ async function ask(promptText) {
   const { value, done } = await lineIterator.next();
   return done ? '' : value;
 }
-async function askYesNo(promptText) {
-  const a = (await ask(`${promptText} (y/n): `)).trim().toLowerCase();
-  return a.startsWith('y');
-}
 
 async function main() {
   console.log('\n=== Scavenger Hunt Setup ===\n');
@@ -38,36 +34,33 @@ async function main() {
   const title = await ask('\nGame title (shown to players) [Scavenger Hunt]: ');
   setSetting('game_title', title.trim() || 'Scavenger Hunt');
 
-  // --- Teams + captains ---
-  console.log('\nSetting up exactly 2 teams.');
+  // --- Teams + roster ---
+  // Teams are entirely admin-assigned — there's no draft or self-pick anymore,
+  // so every player who'll join needs to be on one team's roster ahead of time.
+  console.log('\nSetting up exactly 2 teams. You assign every player to a team here (or later on the Setup page) —');
+  console.log('players never pick their own team.\n');
   const team1Name = (await ask('Team 1 name [Team A]: ')).trim() || 'Team A';
-  const captain1 = (await ask(`${team1Name} captain's name (as they'll type it when they join): `)).trim();
   const team2Name = (await ask('Team 2 name [Team B]: ')).trim() || 'Team B';
-  const captain2 = (await ask(`${team2Name} captain's name: `)).trim();
 
   // Wipe in dependency order — these tables all reference teams/locations via
   // foreign keys, so they have to go first or the deletes below fail.
   db.prepare('DELETE FROM hint_requests').run();
   db.prepare('DELETE FROM stage_completions').run();
   db.prepare('DELETE FROM submissions').run();
+  db.prepare('DELETE FROM location_guesses').run();
   db.prepare('DELETE FROM activity_log').run();
   db.prepare('DELETE FROM players').run();
   db.prepare('DELETE FROM teams').run();
-  const insertTeam = db.prepare('INSERT INTO teams (name, captain_name) VALUES (?, ?)');
-  const t1 = insertTeam.run(team1Name, captain1 || null);
-  const t2 = insertTeam.run(team2Name, captain2 || null);
+  const insertTeam = db.prepare('INSERT INTO teams (name) VALUES (?)');
+  const t1 = insertTeam.run(team1Name);
+  const t2 = insertTeam.run(team2Name);
 
-  // --- Optional pre-set roster for "let the app assign teams" mode ---
-  console.log('\nIf players choose "let the app assign teams," you can pre-set who goes where.');
-  const wantRoster = await askYesNo('Set up that roster now?');
   const rosterMap = {};
-  if (wantRoster) {
-    for (const [teamName, teamId] of [[team1Name, t1.lastInsertRowid], [team2Name, t2.lastInsertRowid]]) {
-      const namesRaw = await ask(`Names for ${teamName}, comma-separated: `);
-      namesRaw.split(',').map((n) => n.trim()).filter(Boolean).forEach((n) => {
-        rosterMap[n.toLowerCase()] = teamId;
-      });
-    }
+  for (const [teamName, teamId] of [[team1Name, t1.lastInsertRowid], [team2Name, t2.lastInsertRowid]]) {
+    const namesRaw = await ask(`Names for ${teamName}, comma-separated (as they'll type them when they join): `);
+    namesRaw.split(',').map((n) => n.trim()).filter(Boolean).forEach((n) => {
+      rosterMap[n.toLowerCase()] = teamId;
+    });
   }
   setSetting('roster_map', JSON.stringify(rosterMap));
 
@@ -76,21 +69,23 @@ async function main() {
   // lists interactively here would be tedious. This just creates one
   // placeholder per team so the game is immediately startable; use the web
   // Setup page (⚙️ Game Setup on the dashboard) to actually build out each
-  // team's real list, with add/remove/reorder controls and NFC fields.
+  // team's real list, with add/remove/reorder controls.
   db.prepare('DELETE FROM hint_requests').run();
   db.prepare('DELETE FROM stage_completions').run();
   db.prepare('DELETE FROM submissions').run();
+  db.prepare('DELETE FROM location_guesses').run();
   db.prepare('DELETE FROM locations').run();
   const insertLoc = db.prepare(`
-    INSERT INTO locations (team_id, stage_order, name, hint, verification_type)
-    VALUES (?, 0, ?, ?, 'media')
+    INSERT INTO locations (team_id, stage_order, name, hint, guess_answer, task)
+    VALUES (?, 0, ?, ?, ?, ?)
   `);
-  insertLoc.run(t1.lastInsertRowid, 'Placeholder location', 'Set this up on the Setup page before the event!');
-  insertLoc.run(t2.lastInsertRowid, 'Placeholder location', 'Set this up on the Setup page before the event!');
+  insertLoc.run(t1.lastInsertRowid, 'Placeholder location', 'Set this up on the Setup page before the event!', 'placeholder', 'Set the real task text on the Setup page.');
+  insertLoc.run(t2.lastInsertRowid, 'Placeholder location', 'Set this up on the Setup page before the event!', 'placeholder', 'Set the real task text on the Setup page.');
 
   console.log(`\nSetup complete: teams "${team1Name}" and "${team2Name}" are ready.`);
   console.log('Each has one placeholder location — go to ⚙️ Game Setup on the admin dashboard');
-  console.log('to build out each team\'s real location list (and set up NFC tags, if you want them).');
+  console.log('to build out each team\'s real location list: a hint, the accepted guesses, and the');
+  console.log('task players get once they guess right.');
   console.log('\nStart the server with: npm start\n');
   rl.close();
 }

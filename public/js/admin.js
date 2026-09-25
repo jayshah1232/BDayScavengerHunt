@@ -100,9 +100,7 @@
   }
 
   function renderLobby(data) {
-    const modeLabel = data.teamMode === 'draft' ? 'Draft with captains'
-      : data.teamMode === 'auto' ? 'Auto-assigned by roster' : 'Not chosen yet — players will pick';
-    $('lobby-mode-text').textContent = `Team mode: ${modeLabel}${data.gamePhase === 'active' ? ' · Hunt in progress' : data.gamePhase === 'ended' ? ' · Hunt ended' : ' · In the lobby'}`;
+    $('lobby-mode-text').textContent = `Teams are admin-assigned via the roster on the Setup page${data.gamePhase === 'active' ? ' · Hunt in progress' : data.gamePhase === 'ended' ? ' · Hunt ended' : ' · In the lobby'}`;
     $('leaderboard-toggle').checked = !!data.leaderboardEnabled;
 
     const unassignedEl = $('unassigned-area');
@@ -112,37 +110,11 @@
       heading.className = 'muted';
       heading.textContent = 'Not on a team yet:';
       unassignedEl.appendChild(heading);
-      const uncaptainedTeams = data.teamMode === 'draft' ? data.teams.filter((t) => !t.captainJoined) : [];
       data.unassigned.forEach((p) => {
         const row = document.createElement('div');
         row.className = 'admin-team-card';
-        row.innerHTML = `<div class="row"><strong>${escapeHtml(p.name)}</strong></div>`;
-        if (uncaptainedTeams.length) {
-          // Only real admin action left: rescue a draft that can't start because
-          // a pre-picked captain never showed up.
-          const actions = document.createElement('div');
-          actions.className = 'submission-actions';
-          uncaptainedTeams.forEach((t) => {
-            const btn = document.createElement('button');
-            btn.className = 'btn-secondary';
-            btn.textContent = `→ Make captain of ${t.name}`;
-            btn.addEventListener('click', async () => {
-              btn.disabled = true;
-              try {
-                await api('/api/admin/force-captain', { method: 'POST', body: JSON.stringify({ playerId: p.id, teamId: t.id }) });
-                await loadOverview();
-              } catch (e) { btn.disabled = false; }
-            });
-            actions.appendChild(btn);
-          });
-          row.appendChild(actions);
-        } else {
-          const note = document.createElement('p');
-          note.className = 'muted';
-          note.style.marginTop = '4px';
-          note.textContent = "Doesn't match the roster — they can fix this themselves by re-entering their name, no action needed from you.";
-          row.appendChild(note);
-        }
+        row.innerHTML = `<div class="row"><strong>${escapeHtml(p.name)}</strong></div>
+          <p class="muted" style="margin-top:4px;">Doesn't match the roster — they can fix this themselves by re-entering their name, no action needed from you.</p>`;
         unassignedEl.appendChild(row);
       });
     }
@@ -177,9 +149,10 @@
     teams.forEach((t) => {
       const div = document.createElement('div');
       div.className = 'admin-team-card';
-      const membersText = t.members.map((m) => escapeHtml(m.name) + (m.is_captain ? ' (captain)' : '')).join(', ') || 'No one yet';
+      const membersText = t.members.map((m) => escapeHtml(m.name)).join(', ') || 'No one yet';
       const quietNote = (t.quietMinutes != null && t.quietMinutes >= 15)
         ? `<p class="muted" style="margin-top:6px;">⚠️ Hasn't checked in for ${t.quietMinutes} minutes — might be worth a nudge.</p>` : '';
+      const phaseNote = t.currentPhase === 'guessing' ? 'guessing the spot' : t.currentPhase === 'task' ? 'on the task' : '';
       div.innerHTML = `
         <div class="row">
           <h3>${escapeHtml(t.name)}</h3>
@@ -187,7 +160,7 @@
         </div>
         <p class="muted" style="margin-top:4px;">${membersText}</p>
         <p class="muted" style="margin-top:6px;">
-          ${t.finished ? 'Finished the hunt 🏁' : `On location ${t.progress + 1} of ${t.total}: ${escapeHtml(t.currentLocation ? t.currentLocation.name : '—')}`}
+          ${t.finished ? 'Finished the hunt 🏁' : `On location ${t.progress + 1} of ${t.total}: ${escapeHtml(t.currentLocation ? t.currentLocation.name : '—')}${phaseNote ? ` (${phaseNote})` : ''}`}
           — 💡 ${t.hintsUsed} hint${t.hintsUsed === 1 ? '' : 's'} used
         </p>
         ${quietNote}
@@ -227,7 +200,7 @@
       div.innerHTML = `
         <div class="submission-meta"><strong>${escapeHtml(s.teamName)}</strong> — ${escapeHtml(s.locationName)}</div>
         <div class="submission-meta">Submitted by ${escapeHtml(s.playerName || 'unknown')}</div>
-        ${s.adminNote ? `<div class="submission-meta">Answer key: ${escapeHtml(s.adminNote)}</div>` : ''}
+        ${s.adminNote ? `<div class="submission-meta">Admin note: ${escapeHtml(s.adminNote)}</div>` : ''}
         ${media}
         <div class="submission-actions">
           <button class="btn-approve" data-id="${s.id}" data-decision="approve">Approve</button>
@@ -287,7 +260,7 @@
     const data = await api('/api/admin/setup');
     setupState = {
       teams: data.teams.map((t) => ({
-        name: t.name, captainName: t.captainName, rosterNames: t.rosterNames,
+        name: t.name, rosterNames: t.rosterNames,
         locations: t.locations.map((l) => ({ ...l })),
       })),
       gamePhase: data.gamePhase,
@@ -318,9 +291,7 @@
         <h3 style="margin-bottom:14px;">Team ${ti + 1}</h3>
         <label>Team name</label>
         <input type="text" data-team="${ti}" data-field="name" value="${escapeAttr(t.name)}">
-        <label>Captain's name (only used if the group picks draft mode)</label>
-        <input type="text" data-team="${ti}" data-field="captainName" value="${escapeAttr(t.captainName)}">
-        <label>Auto-assign roster — names for this team, comma-separated</label>
+        <label>Roster — names for this team, comma-separated (this is how players get placed; there's no self-pick)</label>
         <input type="text" data-team="${ti}" data-field="rosterNames" value="${escapeAttr(t.rosterNames)}">
 
         <h4 style="margin:18px 0 4px;">Locations for this team</h4>
@@ -342,8 +313,7 @@
       btn.addEventListener('click', () => {
         const ti = Number(btn.dataset.team);
         setupState.teams[ti].locations.push({
-          name: '', hint: '', adminNote: '', extraHint: '',
-          verificationType: 'media', nfcBackupCode: '', nfcQuestion: '', nfcAnswer: '',
+          name: '', hint: '', guessAnswer: '', task: '', adminNote: '', extraHint: '',
         });
         renderSetupLocations(ti);
       });
@@ -358,7 +328,6 @@
     locs.forEach((loc, i) => {
       const div = document.createElement('div');
       div.className = 'admin-team-card';
-      const isNfc = loc.verificationType === 'nfc';
       div.innerHTML = `
         <div class="row" style="margin-bottom:10px;">
           <strong>Location ${i + 1}</strong>
@@ -368,39 +337,18 @@
             <button class="btn-danger loc-remove" data-i="${i}" style="padding:6px 10px;">Remove</button>
           </div>
         </div>
-        <label>Name</label>
+        <label>Name (the actual place — e.g. "CN Tower")</label>
         <input type="text" data-i="${i}" data-field="name" value="${escapeAttr(loc.name)}">
-        <label>Hint shown to players</label>
-        <input type="text" data-i="${i}" data-field="hint" value="${escapeAttr(loc.hint)}">
+        <label>Clue shown to players before they guess</label>
+        <input type="text" data-i="${i}" data-field="hint" value="${escapeAttr(loc.hint)}" placeholder="e.g. Tallest building in the city.">
+        <label>Accepted guesses, separated by | (matched case-insensitively, ignoring words like "the")</label>
+        <input type="text" data-i="${i}" data-field="guessAnswer" value="${escapeAttr(loc.guessAnswer)}" placeholder="e.g. CN Tower|CN|the tower">
+        <label>Task — shown once they guess right, this is what they actually go do</label>
+        <input type="text" data-i="${i}" data-field="task" value="${escapeAttr(loc.task)}" placeholder="e.g. Go to the base of the building and take a picture with the whole team.">
         <label>Private admin note (optional)</label>
         <input type="text" data-i="${i}" data-field="adminNote" value="${escapeAttr(loc.adminNote)}">
-        <label>Extra elective hint (optional — players can choose to reveal this if stuck)</label>
+        <label>Extra elective hint (optional — players can choose to reveal this if stuck guessing)</label>
         <input type="text" data-i="${i}" data-field="extraHint" value="${escapeAttr(loc.extraHint)}">
-
-        <label style="margin-top:10px;">Verification method</label>
-        <div style="display:flex;gap:16px;margin-bottom:14px;">
-          <label style="display:flex;align-items:center;gap:6px;font-weight:400;">
-            <input type="radio" name="vtype-${ti}-${i}" data-i="${i}" data-field="verificationType" value="media" ${!isNfc ? 'checked' : ''} style="width:auto;margin:0;">
-            Photo/video
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;font-weight:400;">
-            <input type="radio" name="vtype-${ti}-${i}" data-i="${i}" data-field="verificationType" value="nfc" ${isNfc ? 'checked' : ''} style="width:auto;margin:0;">
-            NFC tag
-          </label>
-        </div>
-
-        <div class="nfc-fields" data-i="${i}" style="${isNfc ? '' : 'display:none;'}">
-          <label>Backup code (in case the tag fails)</label>
-          <input type="text" data-i="${i}" data-field="nfcBackupCode" value="${escapeAttr(loc.nfcBackupCode)}" placeholder="Leave blank to auto-generate">
-          <label>Question after tapping in (optional — blank means tap-only)</label>
-          <input type="text" data-i="${i}" data-field="nfcQuestion" value="${escapeAttr(loc.nfcQuestion)}">
-          <label>Accepted answer(s), separated by |</label>
-          <input type="text" data-i="${i}" data-field="nfcAnswer" value="${escapeAttr(loc.nfcAnswer)}">
-          ${loc.nfcToken ? `
-            <label>Tag URL — write this exact URL onto the physical NFC tag</label>
-            <input type="text" readonly value="${escapeAttr(window.location.origin)}/checkin.html?token=${escapeAttr(loc.nfcToken)}" style="background:var(--parchment-dim);">
-          ` : `<p class="muted">Save once to generate this location's tag URL.</p>`}
-        </div>
       `;
       el.appendChild(div);
     });
@@ -409,13 +357,6 @@
       input.addEventListener('input', (e) => {
         const i = Number(e.target.dataset.i);
         locs[i][e.target.dataset.field] = e.target.value;
-      });
-    });
-    el.querySelectorAll('input[type="radio"]').forEach((input) => {
-      input.addEventListener('change', (e) => {
-        const i = Number(e.target.dataset.i);
-        locs[i].verificationType = e.target.value;
-        renderSetupLocations(ti);
       });
     });
     el.querySelectorAll('.loc-remove').forEach((btn) => {

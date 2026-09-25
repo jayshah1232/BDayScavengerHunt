@@ -10,9 +10,8 @@ function requirePlayer(req, res, next) {
   return res.status(401).json({ error: 'player_required' });
 }
 
-// Team membership can be assigned by someone else's action (a captain's draft
-// pick, an admin placement, a roster match) — never trust a cached session
-// value for it. Always resolve fresh from the players table and attach it.
+// Team membership is assigned by a roster match — never trust a cached
+// session value for it. Always resolve fresh from the players table and attach it.
 function requireTeam(req, res, next) {
   if (!req.session || !req.session.playerId) return res.status(401).json({ error: 'player_required' });
   const player = db.prepare('SELECT team_id FROM players WHERE id = ?').get(req.session.playerId);
