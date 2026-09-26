@@ -15,7 +15,8 @@
 
   <!-- GATE -->
   <section id="screen-gate" class="card">
-    <h2>Yo, hold up</h2>
+    <h2>Ayyy saying mans are here to celebrate more life</h2>
+    <p class="muted">You got me cheesin where ever I am, styll. But you gotta prove you actually with the gang.</p>
     <p class="muted" id="gate-question">Loading up…</p>
     <label for="gate-answer">Your answer</label>
     <input type="text" id="gate-answer" autocomplete="off">
@@ -25,34 +26,28 @@
 
   <!-- JOIN (NAME) -->
   <section id="screen-join" class="card hidden">
-    <h2>Aight, who's this?</h2>
-    <p class="muted">Drop the name your friends actually call you — makes it way easier for us to find you on the roster.</p>
-    <label for="player-name">Name</label>
-    <input type="text" id="player-name" autocomplete="off" maxlength="40">
+    <h2>Ayo whose mans r u?</h2>
+    <p class="muted">Yo fam, tell me ur name, dawg. Mans are tryna get to knoe u styll.</p>
+    <label for="player-name-select">Name</label>
+    <select id="player-name-select"></select>
+    <p class="muted hidden" id="join-empty-note">Looks like everyone's already checked in. If that's not you, holla at the admin.</p>
     <div class="error-text hidden" id="join-error"></div>
-    <button class="btn-primary" id="join-submit">I'm in</button>
-  </section>
-
-  <!-- NAME DIDN'T MATCH THE ROSTER (self-serve fix, no admin involved) -->
-  <section id="screen-not-on-roster" class="card hidden">
-    <h2>Yo, we can't find you</h2>
-    <p class="muted">Your name's not matching anyone on the roster, bud. Double-check it's exactly what the organizer gave you — try your full name or whatever nickname they've got down.</p>
-    <label for="retry-name-input">Try a different name</label>
-    <input type="text" id="retry-name-input" autocomplete="off" maxlength="40">
-    <div class="error-text hidden" id="retry-name-error"></div>
-    <button class="btn-primary" id="retry-name-submit">Run it back</button>
+    <button class="btn-primary" id="join-submit">Submit</button>
   </section>
 
   <!-- WAITING ROOM (has a team, hunt not started) -->
   <section id="screen-waiting-room" class="card hidden">
-    <h2>You're locked in with <span id="wr-team-name">a team</span>!</h2>
+    <h2>Wagwan, <span id="wr-player-name">friend</span>!</h2>
+    <p class="muted">You're locked in with <strong id="wr-team-name">a team</strong>.</p>
     <p class="muted" id="wr-roster"></p>
     <label for="team-name-input">What's your squad's name?</label>
     <input type="text" id="team-name-input" autocomplete="off" maxlength="40">
     <div class="error-text hidden" id="team-name-error"></div>
-    <button class="btn-secondary" id="team-name-submit" style="margin-bottom:14px;">Save it</button>
-    <p class="muted">Chill for now — the hunt kicks off the second the admin says go.</p>
-    <button class="btn-secondary hidden" id="wr-leaderboard-link" style="margin-top:10px;">Peep the standings</button>
+    <button class="btn-secondary" id="team-name-submit" style="margin-bottom:6px;">Save it</button>
+    <p class="muted hidden" id="team-name-status" style="margin-bottom:14px;font-size:0.85rem;">✅ Saved!</p>
+    <p class="muted">Aight now hold up, fam. Game gonna start when the big boss starts it.</p>
+    <button class="btn-secondary hidden" id="wr-leaderboard-link" style="margin-top:10px;margin-bottom:10px;">Peep the standings</button>
+    <button class="btn-secondary" id="wr-switch-player-link">Not you? Switch player</button>
   </section>
 
   <!-- OPT-IN SHARED LEADERBOARD (rough progress only, no hints/photos) -->

@@ -121,16 +121,27 @@
 
     if (data.gamePhase === 'lobby') {
       show('start-hunt-btn');
+      show('force-start-btn');
       $('start-hunt-btn').disabled = !data.canStart;
       if (!data.canStart) show('cant-start-note'); else hide('cant-start-note');
     } else {
       hide('start-hunt-btn');
       hide('cant-start-note');
+      hide('force-start-btn');
     }
   }
 
   $('start-hunt-btn').addEventListener('click', async () => {
     if (!confirm('Start the hunt for everyone now?')) return;
+    await api('/api/admin/start-hunt', { method: 'POST' });
+    await loadOverview();
+  });
+
+  // Bypasses the "every team has a member and a location" check — useful for
+  // last-minute cancellations or roster changes where you just want to go
+  // with whatever the teams currently look like.
+  $('force-start-btn').addEventListener('click', async () => {
+    if (!confirm("Start the hunt right now with the teams exactly as they are — even if some have no members or no locations set up? Continue?")) return;
     await api('/api/admin/start-hunt', { method: 'POST' });
     await loadOverview();
   });

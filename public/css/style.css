@@ -78,7 +78,7 @@ label {
   margin-bottom: 6px;
 }
 
-input[type="text"], input[type="password"], textarea {
+input[type="text"], input[type="password"], textarea, select {
   width: 100%;
   font: inherit;
   padding: 12px 13px;
