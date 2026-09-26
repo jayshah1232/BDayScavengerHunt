@@ -1,7 +1,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const ALL_SCREENS = [
-    'screen-gate', 'screen-join', 'screen-not-on-roster',
+    'screen-gate', 'screen-join',
     'screen-waiting-room', 'screen-leaderboard', 'screen-game', 'screen-recap',
   ];
   function showOnly(id) {
@@ -71,17 +71,55 @@
     }
   });
 
-  // ---- JOIN ----
+  // ---- JOIN (pick your name from everyone who hasn't checked in yet) ----
+  async function showJoinScreen() {
+    // Clear any leftover team-name-page state so a later visit to the
+    // waiting room re-populates fresh instead of keeping a stale value.
+    $('team-name-input').value = '';
+    $('team-name-status').classList.add('hidden');
+    showOnly('screen-join');
+    await loadJoinNames();
+  }
+
+  async function loadJoinNames() {
+    try {
+      const data = await api('/api/player/roster-names');
+      const select = $('player-name-select');
+      select.innerHTML = '';
+      if (!data.available.length) {
+        $('join-empty-note').classList.remove('hidden');
+        select.classList.add('hidden');
+        $('join-submit').disabled = true;
+      } else {
+        $('join-empty-note').classList.add('hidden');
+        select.classList.remove('hidden');
+        $('join-submit').disabled = false;
+        data.available.forEach((n) => {
+          const opt = document.createElement('option');
+          opt.value = n;
+          opt.textContent = n;
+          select.appendChild(opt);
+        });
+      }
+    } catch (e) { /* gate screen will handle a gate/auth failure */ }
+  }
+
   $('join-submit').addEventListener('click', async () => {
     $('join-error').classList.add('hidden');
-    const name = $('player-name').value.trim();
-    if (!name) { $('join-error').textContent = 'Drop a name first.'; $('join-error').classList.remove('hidden'); return; }
+    const name = $('player-name-select').value;
+    if (!name) { $('join-error').textContent = 'Pick a name first.'; $('join-error').classList.remove('hidden'); return; }
     try {
       await api('/api/player/join', { method: 'POST', body: JSON.stringify({ name }) });
       resolveScreen();
     } catch (e) {
-      $('join-error').textContent = 'Something glitched — try again.';
-      $('join-error').classList.remove('hidden');
+      if (e.data?.error === 'name_taken') {
+        $('join-error').textContent = "Someone already grabbed that name — here's the updated list.";
+        $('join-error').classList.remove('hidden');
+        loadJoinNames();
+      } else {
+        $('join-error').textContent = 'Something glitched — try again.';
+        $('join-error').classList.remove('hidden');
+      }
     }
   });
 
@@ -94,17 +132,18 @@
       gs = await api('/api/game/state');
     } catch (e) {
       if (e.data?.error === 'gate_required') return showOnly('screen-gate');
-      return showOnly('screen-join');
+      return showJoinScreen();
     }
     connectSocket();
     syncSocket();
     $('game-title').textContent = gs.gameTitle;
     cachedLeaderboardEnabled = !!gs.leaderboardEnabled;
 
-    if (!gs.me) return showOnly('screen-join');
+    if (!gs.me) return showJoinScreen();
 
-    // No team yet — name didn't match anyone on the roster.
-    if (!gs.team) return showOnly('screen-not-on-roster');
+    // No team — shouldn't normally happen since the join dropdown only offers
+    // roster names, but fall back to picking a name again just in case.
+    if (!gs.team) return showJoinScreen();
 
     if (gs.gamePhase === 'ended') return loadRecap();
     if (gs.gamePhase === 'active') {
@@ -112,9 +151,13 @@
       return loadGameState();
     }
 
+    $('wr-player-name').textContent = gs.me.name;
     $('wr-team-name').textContent = gs.team.name;
     $('wr-roster').textContent = `Roster so far: ${gs.team.members.map((m) => m.name).join(', ')}`;
-    $('team-name-input').value = gs.team.name;
+    // Don't touch the input value or the "Saved!" status here — this runs
+    // again the instant our own rename-team save broadcasts, which would
+    // otherwise wipe out the save confirmation before anyone sees it.
+    if (!$('team-name-input').value) $('team-name-input').value = gs.team.name;
     $('wr-leaderboard-link').classList.toggle('hidden', !cachedLeaderboardEnabled);
     return showOnly('screen-waiting-room');
   }
@@ -256,28 +299,30 @@
     }
   });
 
-  // ---- NAME DIDN'T MATCH THE ROSTER: self-serve retry, no admin involved ----
-  $('retry-name-submit').addEventListener('click', async () => {
-    $('retry-name-error').classList.add('hidden');
-    const name = $('retry-name-input').value.trim();
-    if (!name) return;
+  // ---- WRONG PLAYER PICKED: free up the name and go back to the dropdown ----
+  $('wr-switch-player-link').addEventListener('click', async () => {
+    if (!confirm("Switch to a different name? This'll free up your current name for someone else to grab.")) return;
     try {
-      await api('/api/player/retry-name', { method: 'POST', body: JSON.stringify({ name }) });
+      await api('/api/player/switch', { method: 'POST' });
       resolveScreen();
     } catch (e) {
-      $('retry-name-error').textContent = 'Something glitched — try again.';
-      $('retry-name-error').classList.remove('hidden');
+      alert("Couldn't switch — try again.");
     }
   });
 
   // ---- TEAM NAMING (waiting room, open until the hunt starts) ----
+  let teamNameStatusTimer = null;
   $('team-name-submit').addEventListener('click', async () => {
     $('team-name-error').classList.add('hidden');
+    $('team-name-status').classList.add('hidden');
     const name = $('team-name-input').value.trim();
     if (!name) return;
     try {
       await api('/api/game/rename-team', { method: 'POST', body: JSON.stringify({ name }) });
-      resolveScreen();
+      $('wr-team-name').textContent = name;
+      $('team-name-status').classList.remove('hidden');
+      clearTimeout(teamNameStatusTimer);
+      teamNameStatusTimer = setTimeout(() => $('team-name-status').classList.add('hidden'), 3000);
     } catch (e) {
       $('team-name-error').textContent = e.data?.error === 'hunt_already_started'
         ? "Hunt's already poppin' off — team names are locked now." : "Didn't save — try again.";

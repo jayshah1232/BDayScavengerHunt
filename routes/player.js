@@ -35,12 +35,36 @@ function totalLocations(teamId) {
 function isGuessed(teamId, locationId) {
   return !!db.prepare('SELECT 1 FROM location_guesses WHERE team_id = ? AND location_id = ?').get(teamId, locationId);
 }
+function normalize(str) {
+  return (str || '').trim().toLowerCase();
+}
 
-// --- Join with a display name ---
+// --- Names still up for grabs: everyone on the roster who hasn't joined yet.
+// The join screen only offers a dropdown of these, so a typo (or picking a
+// name someone else already has) isn't possible from the app itself. ---
+router.get('/roster-names', requireGate, (req, res) => {
+  let rosterMap = {};
+  try { rosterMap = JSON.parse(getSetting('roster_map', '{}')); } catch (_) {}
+  const taken = new Set(db.prepare('SELECT name FROM players').all().map((p) => normalize(p.name)));
+  const available = Object.keys(rosterMap)
+    .filter((n) => !taken.has(n))
+    .map((n) => n.charAt(0).toUpperCase() + n.slice(1))
+    .sort((a, b) => a.localeCompare(b));
+  res.json({ available });
+});
+
+// --- Join with a name picked from the roster dropdown ---
 router.post('/join', requireGate, (req, res) => {
   const { name } = req.body || {};
   const clean = (name || '').trim().slice(0, 40);
   if (!clean) return res.status(400).json({ error: 'name_required' });
+
+  let rosterMap = {};
+  try { rosterMap = JSON.parse(getSetting('roster_map', '{}')); } catch (_) {}
+  if (!rosterMap[normalize(clean)]) return res.status(400).json({ error: 'not_on_roster' });
+
+  const already = db.prepare('SELECT 1 FROM players WHERE lower(name) = ?').get(normalize(clean));
+  if (already) return res.status(409).json({ error: 'name_taken' });
 
   const info = db.prepare('INSERT INTO players (name) VALUES (?)').run(clean);
   req.session.playerId = info.lastInsertRowid;
@@ -53,26 +77,24 @@ router.post('/join', requireGate, (req, res) => {
   res.json({ ok: true, playerId: player.id, name: clean });
 });
 
-// --- Self-correct a name that didn't match the roster. No admin involved —
-// this is the whole point of "no placements happening at game time": a typo
-// just gets fixed by the player themselves. ---
-router.post('/retry-name', requireGate, requirePlayer, (req, res) => {
-  const existing = db.prepare('SELECT * FROM players WHERE id = ?').get(req.session.playerId);
-  if (!existing) return res.status(401).json({ error: 'player_required' });
-  if (existing.team_id) return res.status(400).json({ error: 'already_on_a_team' });
-
-  const { name } = req.body || {};
-  const clean = (name || '').trim().slice(0, 40);
-  if (!clean) return res.status(400).json({ error: 'name_required' });
-
-  db.prepare('UPDATE players SET name = ? WHERE id = ?').run(clean, existing.id);
-  req.session.playerName = clean;
-
-  const placed = tryAutoPlace({ id: existing.id, name: clean });
-  if (!placed) logActivity('join', `${clean} tried again but still isn't on the roster.`);
+// --- "That's not me" — picked the wrong name from the dropdown before the
+// hunt started. Deletes the player row (freeing the name back up for
+// whoever it actually belongs to) and clears the session so they land back
+// on the join screen. ---
+router.post('/switch', requireGate, requirePlayer, (req, res) => {
+  if (getSetting('game_phase', 'lobby') !== 'lobby') {
+    return res.status(403).json({ error: 'hunt_already_started' });
+  }
+  const player = db.prepare('SELECT * FROM players WHERE id = ?').get(req.session.playerId);
+  if (player) {
+    db.prepare('DELETE FROM players WHERE id = ?').run(player.id);
+    logActivity('join', `${player.name} switched back to pick a different name`);
+  }
+  req.session.playerId = null;
+  req.session.playerName = null;
 
   req.app.get('io').emit('game-state-changed');
-  res.json({ ok: true, placed });
+  res.json({ ok: true });
 });
 
 // --- Current game state for this player's team: hint/guess or task, progress, submission status ---
