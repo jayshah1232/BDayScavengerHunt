@@ -42,12 +42,16 @@ async function main() {
   const team1Name = (await ask('Team 1 name [Team A]: ')).trim() || 'Team A';
   const team2Name = (await ask('Team 2 name [Team B]: ')).trim() || 'Team B';
 
-  // Wipe in dependency order — these tables all reference teams/locations via
-  // foreign keys, so they have to go first or the deletes below fail.
+  // Wipe in dependency order — every one of these tables references teams
+  // and/or locations via foreign keys, so children have to go first or the
+  // deletes below fail with "FOREIGN KEY constraint failed" (locations and
+  // final_submissions both reference teams; the rest reference locations).
   db.prepare('DELETE FROM hint_requests').run();
   db.prepare('DELETE FROM stage_completions').run();
   db.prepare('DELETE FROM submissions').run();
+  db.prepare('DELETE FROM final_submissions').run();
   db.prepare('DELETE FROM location_guesses').run();
+  db.prepare('DELETE FROM locations').run();
   db.prepare('DELETE FROM activity_log').run();
   db.prepare('DELETE FROM players').run();
   db.prepare('DELETE FROM teams').run();
@@ -69,12 +73,8 @@ async function main() {
   // lists interactively here would be tedious. This just creates one
   // placeholder per team so the game is immediately startable; use the web
   // Setup page (⚙️ Game Setup on the dashboard) to actually build out each
-  // team's real list, with add/remove/reorder controls.
-  db.prepare('DELETE FROM hint_requests').run();
-  db.prepare('DELETE FROM stage_completions').run();
-  db.prepare('DELETE FROM submissions').run();
-  db.prepare('DELETE FROM location_guesses').run();
-  db.prepare('DELETE FROM locations').run();
+  // team's real list, with add/remove/reorder controls. (Already wiped above,
+  // in the same pass as teams — no need to clear again here.)
   const insertLoc = db.prepare(`
     INSERT INTO locations (team_id, stage_order, name, hint, guess_answer, task)
     VALUES (?, 0, ?, ?, ?, ?)
