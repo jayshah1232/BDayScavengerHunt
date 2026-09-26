@@ -35,14 +35,19 @@ h1, h2, h3, .display {
 }
 
 body {
-  display: flex;
-  justify-content: center;
   padding: 24px 16px 64px;
 }
 
+/* Centered with margin auto rather than a flex justify-content — the body
+   also has position:fixed siblings (the lang toggle, the modal overlay),
+   and centering a flex line that contains out-of-flow items is a real area
+   of cross-browser inconsistency (seen drifting off-center on Firefox for
+   Android specifically). margin:auto centers this element on its own,
+   independent of whatever else is on the page. */
 .wrap {
   width: 100%;
   max-width: 460px;
+  margin: 0 auto;
 }
 
 .masthead {

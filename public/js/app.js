@@ -4,7 +4,9 @@
     'screen-gate', 'screen-join',
     'screen-waiting-room', 'screen-ready', 'screen-leaderboard', 'screen-game', 'screen-recap',
   ];
+  let currentScreenId = null;
   function showOnly(id) {
+    currentScreenId = id;
     ALL_SCREENS.forEach((s) => $(s).classList.toggle('hidden', s !== id));
     // The slang/English tooltip only ever makes its first appearance on the
     // waiting-room screen (players have a moment of downtime there) — fade
@@ -127,10 +129,15 @@
   // Re-render whichever screen(s) we have cached data for, from that cache —
   // no network round-trip needed just to flip the language.
   function refreshCurrentScreenText() {
-    if (lastGameState) renderGame(lastGameState);
-    if (lastRecapData) renderRecap(lastRecapData);
-    if (lastLeaderboardData) renderLeaderboardList(lastLeaderboardData);
-    if (lastReadyState) renderReadyScreen(lastReadyState);
+    // Only re-render whichever screen is actually showing right now — several
+    // render functions (renderReadyScreen in particular) call showOnly()
+    // internally, so blindly re-running every cached screen here would yank
+    // the player back to a screen they've already moved on from (e.g. back
+    // to a long-finished ready-up countdown after the hunt's gone active).
+    if (currentScreenId === 'screen-game' && lastGameState) renderGame(lastGameState);
+    else if (currentScreenId === 'screen-recap' && lastRecapData) renderRecap(lastRecapData);
+    else if (currentScreenId === 'screen-leaderboard' && lastLeaderboardData) renderLeaderboardList(lastLeaderboardData);
+    else if (currentScreenId === 'screen-ready' && lastReadyState) renderReadyScreen(lastReadyState);
   }
 
   async function api(path, opts = {}) {
@@ -417,6 +424,16 @@
     $('gate-area').classList.add('hidden');
     $('final-area').classList.add('hidden');
     $('extra-hint-area').classList.add('hidden');
+
+    // The clue/location-name header up top only makes sense during the
+    // guessing/task phases — the gate and final screens have their own
+    // self-contained hint-box, so the stale previous location's clue
+    // shouldn't still be showing above them.
+    if (state.phase === 'gate' || state.phase === 'final') {
+      $('location-hint-box').classList.add('hidden');
+    } else {
+      $('location-hint-box').classList.remove('hidden');
+    }
 
     if (state.phase === 'gate') return renderGate(state);
     if (state.phase === 'final') return renderFinal(state);
