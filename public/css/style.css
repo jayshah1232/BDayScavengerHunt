@@ -56,6 +56,90 @@ body {
   margin-bottom: 6px;
 }
 .masthead h1 { font-size: 1.9rem; }
+.masthead .team-badge {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 5px 16px;
+  background: rgba(0,132,61,0.2);
+  border: 1px solid rgba(0,132,61,0.4);
+  color: var(--parchment);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.lang-toggle-wrap {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 500;
+}
+
+.lang-toggle {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  background: rgba(238,242,246,0.12);
+  color: var(--parchment);
+  border: 1.5px solid rgba(238,242,246,0.35);
+  border-radius: 50%;
+  box-shadow: var(--shadow);
+}
+.lang-toggle:hover { background: rgba(238,242,246,0.2); }
+
+.lang-tooltip {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  width: 230px;
+  background: var(--parchment);
+  color: var(--charcoal);
+  border-radius: 8px;
+  padding: 12px 28px 12px 14px;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+  pointer-events: none;
+}
+.lang-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.lang-tooltip::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 16px;
+  width: 12px;
+  height: 12px;
+  background: var(--parchment);
+  transform: rotate(45deg);
+}
+.lang-tooltip p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.lang-tooltip-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--charcoal);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
 
 .card {
   background: var(--parchment);
@@ -218,3 +302,29 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   display: block; text-align: center; margin-top: 18px; color: rgba(238,242,246,0.7);
   font-size: 0.85rem; text-decoration: underline; cursor: pointer; background: none; border: none; width: auto;
 }
+
+/* In-page replacement for alert/confirm/prompt (see js/modal.js) — native
+   browser dialogs are unreliable on mobile, especially in home-screen/PWA
+   contexts. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 26, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1000;
+}
+.modal-card {
+  background: var(--parchment);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px 22px;
+  max-width: 380px;
+  width: 100%;
+}
+.modal-card p { margin: 0 0 16px; font-size: 1rem; }
+.modal-card input[type="text"] { margin-bottom: 16px; }
+.modal-actions { display: flex; gap: 10px; }
+.modal-actions button { width: auto; flex: 1; }

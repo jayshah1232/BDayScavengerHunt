@@ -128,7 +128,20 @@
   </section>
 </div>
 
+<!-- Shared modal (see js/modal.js) — replaces alert/confirm/prompt -->
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div class="modal-card">
+    <p id="modal-message"></p>
+    <input type="text" id="modal-input" class="hidden">
+    <div class="modal-actions">
+      <button class="btn-secondary hidden" id="modal-cancel-btn">Cancel</button>
+      <button class="btn-primary" id="modal-confirm-btn">OK</button>
+    </div>
+  </div>
+</div>
+
 <script src="/socket.io/socket.io.js"></script>
+<script src="/js/modal.js"></script>
 <script src="/js/admin.js"></script>
 </body>
 </html>

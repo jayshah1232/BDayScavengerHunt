@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, getSetting, logActivity, GATE_WAIT_SECONDS } = require('../db');
+const { db, getSetting, setSetting, logActivity, GATE_WAIT_SECONDS, READY_COUNTDOWN_SECONDS } = require('../db');
 const { requireGate, requirePlayer, requireTeam } = require('../middleware/auth');
 
 const router = express.Router();
@@ -63,14 +63,39 @@ function isGuessed(teamId, locationId) {
   return !!db.prepare('SELECT 1 FROM location_guesses WHERE team_id = ? AND location_id = ?').get(teamId, locationId);
 }
 
-// ---- Game state used by the waiting room / roster-mismatch screens ----
+function totalToReadyCount() {
+  return db.prepare('SELECT COUNT(*) AS c FROM players WHERE team_id IS NOT NULL').get().c;
+}
+function readyCount() {
+  return db.prepare('SELECT COUNT(*) AS c FROM players WHERE team_id IS NOT NULL AND is_ready = 1').get().c;
+}
+
+// ---- Game state used by the waiting room / ready-up / roster-mismatch screens ----
 router.get('/state', requireGate, requirePlayer, (req, res) => {
   const me = db.prepare('SELECT * FROM players WHERE id = ?').get(req.session.playerId);
   const myTeam = me && me.team_id ? teamRow(me.team_id) : null;
+  const gamePhase = getSetting('game_phase', 'lobby');
+
+  let ready = null;
+  if (gamePhase === 'ready') {
+    const allReadyAt = getSetting('all_ready_at');
+    const notReady = db.prepare(
+      `SELECT name FROM players WHERE team_id IS NOT NULL AND is_ready = 0 ORDER BY created_at ASC`
+    ).all().map((p) => p.name);
+    ready = {
+      isReady: !!(me && me.is_ready),
+      readyCount: readyCount(),
+      totalToReady: totalToReadyCount(),
+      notReady,
+      countdownEndsAt: allReadyAt
+        ? new Date(allReadyAt.replace(' ', 'T') + 'Z').getTime() + READY_COUNTDOWN_SECONDS * 1000
+        : null,
+    };
+  }
 
   res.json({
     gameTitle: getSetting('game_title', 'Scavenger Hunt'),
-    gamePhase: getSetting('game_phase', 'lobby'),
+    gamePhase,
     leaderboardEnabled: getSetting('leaderboard_enabled') === '1',
     me: me ? { id: me.id, name: me.name, teamId: me.team_id } : null,
     team: myTeam ? {
@@ -78,7 +103,39 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
       name: myTeam.name,
       members: db.prepare('SELECT id, name FROM players WHERE team_id = ? ORDER BY created_at ASC').all(myTeam.id),
     } : null,
+    ready,
   });
+});
+
+// ---- Ready-up: hit once the admin has started the hunt. Once every joined
+// player has hit it, a short countdown runs (timed server-side) and the
+// hunt actually goes live for everyone at once. ----
+router.post('/ready', requireGate, requirePlayer, requireTeam, (req, res) => {
+  if (getSetting('game_phase') !== 'ready') return res.status(400).json({ error: 'not_ready_phase' });
+
+  db.prepare('UPDATE players SET is_ready = 1 WHERE id = ?').run(req.session.playerId);
+  logActivity('game', `${req.session.playerName} is ready`, req.teamId);
+
+  const io = req.app.get('io');
+
+  if (readyCount() >= totalToReadyCount() && !getSetting('all_ready_at')) {
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    setSetting('all_ready_at', now);
+    logActivity('game', `Everyone's ready — starting in ${READY_COUNTDOWN_SECONDS}...`);
+    setTimeout(() => {
+      // Only flip if still in the ready phase — guards against a Reset
+      // Game happening mid-countdown.
+      if (getSetting('game_phase') === 'ready') {
+        setSetting('game_phase', 'active');
+        setSetting('hunt_started_at', new Date().toISOString().slice(0, 19).replace('T', ' '));
+        logActivity('game', 'The hunt has begun!');
+        io.emit('game-state-changed');
+      }
+    }, READY_COUNTDOWN_SECONDS * 1000);
+  }
+
+  io.emit('game-state-changed');
+  res.json({ ok: true });
 });
 
 // ---- Guess the current location; once correct, its task unlocks ----

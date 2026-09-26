@@ -27,10 +27,13 @@ CREATE TABLE IF NOT EXISTS locations (
   stage_order INTEGER NOT NULL,
   name TEXT NOT NULL,
   hint TEXT NOT NULL,
+  hint_en TEXT, -- optional overly-formal English translation of hint, for the slang/English toggle
   guess_answer TEXT NOT NULL DEFAULT '', -- pipe-separated accepted guesses, matched case/filler-word-insensitively
   task TEXT NOT NULL DEFAULT '', -- instructions (usually "take a photo of...") shown once the location is correctly guessed
+  task_en TEXT, -- optional English translation of task
   admin_note TEXT,
   extra_hint TEXT, -- optional elective hint players can reveal if stuck guessing
+  extra_hint_en TEXT, -- optional English translation of extra_hint
   UNIQUE(team_id, stage_order)
 );
 
@@ -38,6 +41,7 @@ CREATE TABLE IF NOT EXISTS players (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   team_id INTEGER REFERENCES teams(id),
+  is_ready INTEGER NOT NULL DEFAULT 0, -- ready-up screen, between the admin starting the hunt and it actually going live
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -149,15 +153,33 @@ if (!locationCols.includes('team_id') || locationCols.includes('verification_typ
       stage_order INTEGER NOT NULL,
       name TEXT NOT NULL,
       hint TEXT NOT NULL,
+      hint_en TEXT,
       guess_answer TEXT NOT NULL DEFAULT '',
       task TEXT NOT NULL DEFAULT '',
+      task_en TEXT,
       admin_note TEXT,
       extra_hint TEXT,
+      extra_hint_en TEXT,
       UNIQUE(team_id, stage_order)
     );
   `);
   db.prepare('UPDATE teams SET current_stage = 0').run();
   console.log('Database migrated: locations now use a guess-the-spot-then-do-a-task flow (NFC support removed). Reconfigure locations on the Setup page.');
+}
+
+// Migration: add the optional English-translation columns (slang/English
+// toggle) if this DB predates them.
+const locationCols2 = db.prepare('PRAGMA table_info(locations)').all().map((c) => c.name);
+['hint_en', 'task_en', 'extra_hint_en'].forEach((col) => {
+  if (!locationCols2.includes(col)) {
+    db.exec(`ALTER TABLE locations ADD COLUMN ${col} TEXT`);
+  }
+});
+
+// Migration: add the ready-up flag to players if this DB predates it.
+const playerCols2 = db.prepare('PRAGMA table_info(players)').all().map((c) => c.name);
+if (!playerCols2.includes('is_ready')) {
+  db.exec('ALTER TABLE players ADD COLUMN is_ready INTEGER NOT NULL DEFAULT 0');
 }
 
 function getSetting(key, fallback = null) {
@@ -178,6 +200,9 @@ function logActivity(type, message, teamId = null) {
 // Seconds a team must wait at the "Ah Ah We Aint Done Yet" gate (after their
 // last regular location) before the bonus final-round challenge unlocks.
 const GATE_WAIT_SECONDS = 30;
+
+// Seconds between everyone hitting "Ready" and the hunt actually going live.
+const READY_COUNTDOWN_SECONDS = 3;
 
 // The single place a team's stage ever moves forward through their regular
 // locations — whether triggered by an admin approving media or a manual
@@ -229,12 +254,12 @@ function resetGameProgress() {
   db.prepare('DELETE FROM activity_log').run();
   db.prepare('DELETE FROM players').run();
   db.prepare('UPDATE teams SET current_stage = 0, finished_regular_at = NULL').run();
-  db.prepare("DELETE FROM settings WHERE key IN ('hunt_started_at', 'winning_team_id')").run();
+  db.prepare("DELETE FROM settings WHERE key IN ('hunt_started_at', 'winning_team_id', 'all_ready_at')").run();
   setSetting('game_phase', 'lobby');
 }
 
 module.exports = {
   db, getSetting, setSetting, logActivity,
   advanceTeamStage, endGame, minutesSinceLastPlayerActivity, resetGameProgress,
-  GATE_WAIT_SECONDS,
+  GATE_WAIT_SECONDS, READY_COUNTDOWN_SECONDS,
 };

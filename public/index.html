@@ -7,16 +7,26 @@
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+<!-- Slang/English toggle — pinned to the corner, separate from page flow -->
+<div class="lang-toggle-wrap">
+  <button class="lang-toggle" id="lang-toggle-btn" type="button" aria-label="Toggle slang/English">🧐</button>
+  <div class="lang-tooltip hidden" id="lang-tooltip">
+    <button class="lang-tooltip-close" id="lang-tooltip-close" type="button" aria-label="Dismiss">×</button>
+    <p id="lang-tooltip-text"></p>
+  </div>
+</div>
+
 <div class="wrap">
   <div class="masthead">
     <div class="eyebrow">OUT HERE IN THE 6</div>
     <h1 id="game-title">Scavenger Hunt</h1>
+    <div class="team-badge hidden" id="team-badge"></div>
   </div>
 
   <!-- GATE -->
   <section id="screen-gate" class="card">
-    <h2>Ayyy saying mans are here to celebrate more life</h2>
-    <p class="muted">You got me cheesin where ever I am, styll. But you gotta prove you actually with the gang.</p>
+    <h2 id="gate-h2">Ayyy saying mans are here to celebrate more life</h2>
+    <p class="muted" id="gate-subtext">You got me cheesin where ever I am, styll. But you gotta prove you actually with the gang.</p>
     <p class="muted" id="gate-question">Loading up…</p>
     <label for="gate-answer">Your answer</label>
     <input type="text" id="gate-answer" autocomplete="off">
@@ -26,8 +36,8 @@
 
   <!-- JOIN (NAME) -->
   <section id="screen-join" class="card hidden">
-    <h2>Ayo whose mans r u?</h2>
-    <p class="muted">Yo fam, tell me ur name, dawg. Mans are tryna get to knoe u styll.</p>
+    <h2 id="join-h2">Ayo whose mans r u?</h2>
+    <p class="muted" id="join-subtext">Yo fam, tell me ur name, dawg. Mans are tryna get to knoe u styll.</p>
     <label for="player-name-select">Name</label>
     <select id="player-name-select"></select>
     <p class="muted hidden" id="join-empty-note">Looks like everyone's already checked in. If that's not you, holla at the admin.</p>
@@ -37,22 +47,30 @@
 
   <!-- WAITING ROOM (has a team, hunt not started) -->
   <section id="screen-waiting-room" class="card hidden">
-    <h2>Wagwan, <span id="wr-player-name">friend</span>!</h2>
-    <p class="muted">You're locked in with <strong id="wr-team-name">a team</strong>.</p>
+    <h2 id="wr-h2">Wagwan, <span id="wr-player-name">friend</span>!</h2>
+    <p class="muted" id="wr-locked-in-text">You're locked in with <strong id="wr-team-name">a team</strong>.</p>
     <p class="muted" id="wr-roster"></p>
     <label for="team-name-input">What's your squad's name?</label>
     <input type="text" id="team-name-input" autocomplete="off" maxlength="40">
     <div class="error-text hidden" id="team-name-error"></div>
     <button class="btn-secondary" id="team-name-submit" style="margin-bottom:6px;">Save it</button>
     <p class="muted hidden" id="team-name-status" style="margin-bottom:14px;font-size:0.85rem;">✅ Saved!</p>
-    <p class="muted">Aight now hold up, fam. Game gonna start when the big boss starts it.</p>
+    <p class="muted" id="wr-hang-tight">Aight now hold up, fam. Game gonna start when the big boss starts it.</p>
     <button class="btn-secondary hidden" id="wr-leaderboard-link" style="margin-top:10px;margin-bottom:10px;">Peep the standings</button>
     <button class="btn-secondary" id="wr-switch-player-link">Not you? Switch player</button>
   </section>
 
+  <!-- READY UP (admin started the hunt — wait for everyone to hit ready, then a short countdown) -->
+  <section id="screen-ready" class="card hidden">
+    <h2 id="ready-h2">Y'all Ready Or Nah?</h2>
+    <p class="muted" id="ready-subtext">Hit the button when you're set. Once everyone's locked in, we go in 3.</p>
+    <button class="btn-primary" id="ready-btn">I'm Ready!</button>
+    <div id="ready-status-area"></div>
+  </section>
+
   <!-- OPT-IN SHARED LEADERBOARD (rough progress only, no hints/photos) -->
   <section id="screen-leaderboard" class="card hidden">
-    <h2>Standings</h2>
+    <h2 id="leaderboard-h2">Standings</h2>
     <div id="leaderboard-list"></div>
     <button class="btn-secondary" id="leaderboard-back" style="margin-top:14px;">Back</button>
   </section>
@@ -77,7 +95,7 @@
 
         <!-- GUESSING PHASE: guess the spot from the clue -->
         <div id="guess-area" class="hidden">
-          <label for="guess-input">Where you think this is, fam?</label>
+          <label for="guess-input" id="guess-label">Where you think this is, fam?</label>
           <input type="text" id="guess-input" autocomplete="off">
           <div class="error-text hidden" id="guess-error"></div>
           <button class="btn-primary" id="guess-submit">Lock it in</button>
@@ -100,25 +118,25 @@
             </label>
             <div class="error-text hidden" id="submit-error"></div>
             <button class="btn-primary" id="submit-btn" disabled>Send it in</button>
-            <p class="muted" style="margin-top:10px;font-size:0.82rem;">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
+            <p class="muted" style="margin-top:10px;font-size:0.82rem;" id="whatsapp-note-1">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
           </div>
         </div>
 
         <!-- GATE PHASE: finished all regular locations, locked for a bit before the bonus round -->
         <div id="gate-area" class="hidden">
           <div class="hint-box task-box">
-            <div class="loc-name">HOLD UP</div>
-            <div class="hint-text">Ah Ah We Aint Done Yet</div>
+            <div class="loc-name" id="gate-loc-name">HOLD UP</div>
+            <div class="hint-text" id="gate-hint-text">Ah Ah We Aint Done Yet</div>
           </div>
-          <p class="muted">Ayyy mans figured it all out. Sayin mans are big brain, ahlie. But the game aint done yet...</p>
+          <p class="muted" id="gate-subtext-2">Ayyy mans figured it all out. Sayin mans are big brain, ahlie. But the game aint done yet...</p>
           <button class="btn-secondary" id="gate-continue-btn" disabled>Continue</button>
         </div>
 
         <!-- FINAL PHASE: the bonus "find the host" round — approving this one ends the whole hunt -->
         <div id="final-area" class="hidden">
           <div class="hint-box task-box">
-            <div class="loc-name">BONUS ROUND</div>
-            <div class="hint-text">FIND ME YUH EEDIYATS</div>
+            <div class="loc-name" id="final-loc-name">BONUS ROUND</div>
+            <div class="hint-text" id="final-hint-text">FIND ME YUH EEDIYATS</div>
           </div>
 
           <div id="final-status-area"></div>
@@ -131,7 +149,7 @@
             </label>
             <div class="error-text hidden" id="final-submit-error"></div>
             <button class="btn-primary" id="final-submit-btn" disabled>Send it in</button>
-            <p class="muted" style="margin-top:10px;font-size:0.82rem;">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
+            <p class="muted" style="margin-top:10px;font-size:0.82rem;" id="whatsapp-note-2">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
           </div>
         </div>
       </div>
@@ -143,12 +161,25 @@
     <h2 id="recap-title">Recap</h2>
     <p class="muted" id="recap-summary"></p>
     <div id="recap-splits"></div>
-    <h3 style="margin-top:16px;">Pics &amp; vids</h3>
+    <h3 style="margin-top:16px;" id="recap-media-h3">Pics &amp; vids</h3>
     <div id="recap-media"></div>
   </section>
 </div>
 
+<!-- Shared modal (see js/modal.js) — replaces alert/confirm/prompt -->
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div class="modal-card">
+    <p id="modal-message"></p>
+    <input type="text" id="modal-input" class="hidden">
+    <div class="modal-actions">
+      <button class="btn-secondary hidden" id="modal-cancel-btn">Cancel</button>
+      <button class="btn-primary" id="modal-confirm-btn">OK</button>
+    </div>
+  </div>
+</div>
+
 <script src="/socket.io/socket.io.js"></script>
+<script src="/js/modal.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

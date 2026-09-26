@@ -88,8 +88,8 @@
   let titleFlashTimer = null;
   const BASE_TITLE = document.title;
 
-  $('notify-btn').addEventListener('click', () => {
-    if (!('Notification' in window)) { alert("This browser doesn't support notifications."); return; }
+  $('notify-btn').addEventListener('click', async () => {
+    if (!('Notification' in window)) { await modalAlert("This browser doesn't support notifications."); return; }
     Notification.requestPermission().then((perm) => {
       notificationsEnabled = perm === 'granted';
       $('notify-btn').textContent = notificationsEnabled ? '🔔 Notifications on' : "Couldn't enable — check your browser's site settings";
@@ -161,7 +161,11 @@
   }
 
   function renderLobby(data) {
-    $('lobby-mode-text').textContent = `Teams are admin-assigned via the roster on the Setup page${data.gamePhase === 'active' ? ' · Hunt in progress' : data.gamePhase === 'ended' ? ' · Hunt ended' : ' · In the lobby'}`;
+    const phaseNote = data.gamePhase === 'active' ? ' · Hunt in progress'
+      : data.gamePhase === 'ended' ? ' · Hunt ended'
+      : data.gamePhase === 'ready' ? ` · Waiting for everyone to ready up (${data.readyCount}/${data.totalToReady})`
+      : ' · In the lobby';
+    $('lobby-mode-text').textContent = `Teams are admin-assigned via the roster on the Setup page${phaseNote}`;
     $('leaderboard-toggle').checked = !!data.leaderboardEnabled;
 
     if (data.gamePhase === 'ended' && data.winningTeamName) {
@@ -200,7 +204,7 @@
   }
 
   $('start-hunt-btn').addEventListener('click', async () => {
-    if (!confirm('Start the hunt for everyone now?')) return;
+    if (!(await modalConfirm('Start the hunt for everyone now?'))) return;
     await api('/api/admin/start-hunt', { method: 'POST' });
     await loadOverview();
   });
@@ -209,7 +213,7 @@
   // last-minute cancellations or roster changes where you just want to go
   // with whatever the teams currently look like.
   $('force-start-btn').addEventListener('click', async () => {
-    if (!confirm("Start the hunt right now with the teams exactly as they are — even if some have no members or no locations set up? Continue?")) return;
+    if (!(await modalConfirm("Start the hunt right now with the teams exactly as they are — even if some have no members or no locations set up? Continue?"))) return;
     await api('/api/admin/start-hunt', { method: 'POST' });
     await loadOverview();
   });
@@ -259,7 +263,7 @@
       btn.addEventListener('click', async () => {
         const teamId = btn.dataset.team;
         const teamName = btn.dataset.name;
-        const note = prompt(`Advance ${teamName} to the next hint without a submission. Optional note:`, '');
+        const note = await modalPrompt(`Advance ${teamName} to the next hint without a submission. Optional note:`, '');
         if (note === null) return;
         btn.disabled = true;
         try {
@@ -301,13 +305,13 @@
         const id = btn.dataset.id;
         const decision = btn.dataset.decision;
         let note = '';
-        if (decision === 'reject') note = prompt('Optional note for the team (why it was rejected):', '') || '';
+        if (decision === 'reject') note = (await modalPrompt('Optional note for the team (why it was rejected):', '')) || '';
         btn.closest('.submission-card').querySelectorAll('button').forEach((b) => (b.disabled = true));
         try {
           await api(`/api/admin/review/${id}`, { method: 'POST', body: JSON.stringify({ decision, note }) });
           await loadOverview();
         } catch (e) {
-          alert('Could not save that decision — try again.');
+          await modalAlert('Could not save that decision — try again.');
           await loadOverview();
         }
       });
@@ -315,10 +319,9 @@
   }
 
   function renderPendingFinal(pendingFinal) {
-    const card = $('pending-final-card');
     const el = $('pending-final-list');
-    if (!pendingFinal.length) { hide(card); el.innerHTML = ''; return; }
-    show(card);
+    if (!pendingFinal.length) { hide('pending-final-card'); el.innerHTML = ''; return; }
+    show('pending-final-card');
     el.innerHTML = '';
     pendingFinal.forEach((s) => {
       const div = document.createElement('div');
@@ -341,15 +344,15 @@
       btn.addEventListener('click', async () => {
         const id = btn.dataset.id;
         const decision = btn.dataset.decision;
-        if (decision === 'approve' && !confirm('This ends the hunt RIGHT NOW for both teams — are you sure this is really the host?')) return;
+        if (decision === 'approve' && !(await modalConfirm('This ends the hunt RIGHT NOW for both teams — are you sure this is really the host?'))) return;
         let note = '';
-        if (decision === 'reject') note = prompt('Optional note for the team (why it was rejected):', '') || '';
+        if (decision === 'reject') note = (await modalPrompt('Optional note for the team (why it was rejected):', '')) || '';
         btn.closest('.submission-card').querySelectorAll('button').forEach((b) => (b.disabled = true));
         try {
           await api(`/api/admin/review-final/${id}`, { method: 'POST', body: JSON.stringify({ decision, note }) });
           await loadOverview();
         } catch (e) {
-          alert('Could not save that decision — try again.');
+          await modalAlert('Could not save that decision — try again.');
           await loadOverview();
         }
       });
@@ -479,7 +482,7 @@
       btn.addEventListener('click', () => {
         const ti = Number(btn.dataset.team);
         setupState.teams[ti].locations.push({
-          name: '', hint: '', guessAnswer: '', task: '', adminNote: '', extraHint: '',
+          name: '', hint: '', hintEn: '', guessAnswer: '', task: '', taskEn: '', adminNote: '', extraHint: '', extraHintEn: '',
         });
         renderSetupLocations(ti);
       });
@@ -507,14 +510,20 @@
         <input type="text" data-i="${i}" data-field="name" value="${escapeAttr(loc.name)}">
         <label>Clue shown to players before they guess</label>
         <input type="text" data-i="${i}" data-field="hint" value="${escapeAttr(loc.hint)}" placeholder="e.g. Tallest building in the city.">
+        <label>Clue — English translation (optional, shown when a player toggles off the slang)</label>
+        <input type="text" data-i="${i}" data-field="hintEn" value="${escapeAttr(loc.hintEn)}">
         <label>Accepted guesses, separated by | (matched case-insensitively, ignoring words like "the")</label>
         <input type="text" data-i="${i}" data-field="guessAnswer" value="${escapeAttr(loc.guessAnswer)}" placeholder="e.g. CN Tower|CN|the tower">
         <label>Task — shown once they guess right, this is what they actually go do</label>
         <input type="text" data-i="${i}" data-field="task" value="${escapeAttr(loc.task)}" placeholder="e.g. Go to the base of the building and take a picture with the whole team.">
+        <label>Task — English translation (optional)</label>
+        <input type="text" data-i="${i}" data-field="taskEn" value="${escapeAttr(loc.taskEn)}">
         <label>Private admin note (optional)</label>
         <input type="text" data-i="${i}" data-field="adminNote" value="${escapeAttr(loc.adminNote)}">
         <label>Extra elective hint (optional — players can choose to reveal this if stuck guessing)</label>
         <input type="text" data-i="${i}" data-field="extraHint" value="${escapeAttr(loc.extraHint)}">
+        <label>Extra hint — English translation (optional)</label>
+        <input type="text" data-i="${i}" data-field="extraHintEn" value="${escapeAttr(loc.extraHintEn)}">
       `;
       el.appendChild(div);
     });
@@ -563,7 +572,7 @@
       $('setup-gate-answer').value = '';
       $('setup-admin-password').value = '';
       await loadSetup();
-      alert('Saved!');
+      await modalAlert('Saved!');
     } catch (e) {
       $('setup-save-error').textContent = e.data?.error === 'hunt_in_progress'
         ? 'The hunt has already started — reset the game before changing setup.'
@@ -575,13 +584,13 @@
   });
 
   $('setup-reset-btn').addEventListener('click', async () => {
-    if (!confirm('This clears all players and progress. Continue?')) return;
+    if (!(await modalConfirm('This clears all players and progress. Continue?'))) return;
     try {
       await api('/api/admin/setup/reset', { method: 'POST' });
       await loadSetup();
-      alert('Game reset — ready for a fresh start.');
+      await modalAlert('Game reset — ready for a fresh start.');
     } catch (e) {
-      alert('Could not reset — try again.');
+      await modalAlert('Could not reset — try again.');
     }
   });
 

@@ -4,6 +4,8 @@
  *
  * Expected CSV columns (header row required, any order):
  *   Name, Acceptable Answers, Clue, Task, Extra Hint, Team, Order
+ * Optional columns, for the players' slang/English toggle:
+ *   Clue (English), Task (English), Extra Hint (English)
  * - "Acceptable Answers" is pipe-separated ("CN Tower|CN|Canada's National Tower"),
  *   matched case-insensitively and ignoring filler words like "the" — same
  *   format the Setup page uses.
@@ -80,9 +82,12 @@ function locationsForTeam(records, teamNumber) {
     return {
       name: r.Name,
       hint: r.Clue,
+      hintEn: r['Clue (English)'] || '',
       guessAnswer: r['Acceptable Answers'],
       task: r.Task,
+      taskEn: r['Task (English)'] || '',
       extraHint: r['Extra Hint'],
+      extraHintEn: r['Extra Hint (English)'] || '',
       order,
     };
   });
@@ -157,13 +162,19 @@ function main() {
   db.prepare('DELETE FROM locations').run();
 
   const insertLoc = db.prepare(`
-    INSERT INTO locations (team_id, stage_order, name, hint, guess_answer, task, extra_hint)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO locations (team_id, stage_order, name, hint, hint_en, guess_answer, task, task_en, extra_hint, extra_hint_en)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   [[team1.id, team1Locations], [team2.id, team2Locations]].forEach(([teamId, locations]) => {
     locations.forEach((loc, i) => {
-      insertLoc.run(teamId, i, loc.name, loc.hint, loc.guessAnswer, loc.task, loc.extraHint || null);
+      insertLoc.run(
+        teamId, i, loc.name,
+        loc.hint, loc.hintEn || null,
+        loc.guessAnswer,
+        loc.task, loc.taskEn || null,
+        loc.extraHint || null, loc.extraHintEn || null
+      );
       console.log(`  ${i + 1}. ${loc.name}`);
     });
   });

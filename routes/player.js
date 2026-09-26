@@ -176,10 +176,13 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
     gateReadyAt,
     location: location ? {
       hint: location.hint,
+      hintEn: location.hint_en || null,
       hasExtraHint: !!location.extra_hint,
       extraHint: hintUsed ? location.extra_hint : null,
+      extraHintEn: hintUsed ? (location.extra_hint_en || null) : null,
       name: phase === 'task' ? location.name : null,
       task: phase === 'task' ? location.task : null,
+      taskEn: phase === 'task' ? (location.task_en || null) : null,
     } : null,
     pendingCount,
     lastRejectedNote,
@@ -304,7 +307,7 @@ router.post('/hint', requireGate, requirePlayer, requireTeam, (req, res) => {
     req.app.get('io').to('admins').emit('admin-activity');
   }
 
-  res.json({ ok: true, hint: location.extra_hint });
+  res.json({ ok: true, hint: location.extra_hint, hintEn: location.extra_hint_en || null });
 });
 
 module.exports = router;

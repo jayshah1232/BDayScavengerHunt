@@ -97,11 +97,16 @@ router.get('/overview', requireGate, requireAdmin, (req, res) => {
   const winningTeamId = Number(getSetting('winning_team_id') || 0) || null;
   const winningTeam = winningTeamId ? db.prepare('SELECT name FROM teams WHERE id = ?').get(winningTeamId) : null;
 
+  const readyCount = db.prepare('SELECT COUNT(*) AS c FROM players WHERE team_id IS NOT NULL AND is_ready = 1').get().c;
+  const totalToReady = db.prepare('SELECT COUNT(*) AS c FROM players WHERE team_id IS NOT NULL').get().c;
+
   res.json({
     gamePhase: getSetting('game_phase', 'lobby'),
     leaderboardEnabled: getSetting('leaderboard_enabled') === '1',
     winningTeamId,
     winningTeamName: winningTeam ? winningTeam.name : null,
+    readyCount,
+    totalToReady,
     teams,
     // Informational only — rosters are set ahead of time on the Setup page,
     // so there's no live "place this player" action for the admin to take.
@@ -219,10 +224,14 @@ router.post('/review-final/:submissionId', requireGate, requireAdmin, (req, res)
 });
 
 // ---- Lobby controls ----
+// Doesn't go straight to 'active' — players land on a ready-up screen first
+// (see routes/game.js's /ready), and the hunt only actually goes live once
+// everyone who's joined has hit Ready and the countdown runs out.
 router.post('/start-hunt', requireGate, requireAdmin, (req, res) => {
-  setSetting('game_phase', 'active');
-  setSetting('hunt_started_at', new Date().toISOString().slice(0, 19).replace('T', ' '));
-  logActivity('game', 'The admin started the hunt!');
+  db.prepare('UPDATE players SET is_ready = 0 WHERE team_id IS NOT NULL').run();
+  db.prepare("DELETE FROM settings WHERE key = 'all_ready_at'").run();
+  setSetting('game_phase', 'ready');
+  logActivity('game', 'The admin started the hunt — waiting for everyone to ready up!');
   broadcastGame(req);
   res.json({ ok: true });
 });
@@ -267,15 +276,18 @@ router.get('/hint-sheet', requireGate, requireAdmin, (req, res) => {
         <td>${i + 1}</td>
         <td>${escapeHtml(l.name)}</td>
         <td>${escapeHtml(l.hint)}</td>
+        <td>${escapeHtml(l.hint_en || '—')}</td>
         <td>${escapeHtml(l.guess_answer || '—')}</td>
         <td>${escapeHtml(l.task || '—')}</td>
+        <td>${escapeHtml(l.task_en || '—')}</td>
         <td>${escapeHtml(l.admin_note || '')}</td>
         <td>${escapeHtml(l.extra_hint || '—')}</td>
+        <td>${escapeHtml(l.extra_hint_en || '—')}</td>
       </tr>`).join('');
     return `
       <h2>${escapeHtml(team.name)}</h2>
-      <table><thead><tr><th>#</th><th>Location</th><th>Hint</th><th>Accepted guesses</th><th>Task</th><th>Admin note</th><th>Extra hint</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="7">No locations configured</td></tr>'}</tbody></table>`;
+      <table><thead><tr><th>#</th><th>Location</th><th>Hint</th><th>Hint (English)</th><th>Accepted guesses</th><th>Task</th><th>Task (English)</th><th>Admin note</th><th>Extra hint</th><th>Extra hint (English)</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="10">No locations configured</td></tr>'}</tbody></table>`;
   }).join('');
 
   res.send(`<!DOCTYPE html><html><head><title>Hint Sheet</title>
@@ -319,10 +331,13 @@ router.get('/setup', requireGate, requireAdmin, (req, res) => {
       locations: db.prepare('SELECT * FROM locations WHERE team_id = ? ORDER BY stage_order ASC').all(t.id).map((l) => ({
         name: l.name,
         hint: l.hint,
+        hintEn: l.hint_en || '',
         guessAnswer: l.guess_answer || '',
         task: l.task || '',
+        taskEn: l.task_en || '',
         adminNote: l.admin_note || '',
         extraHint: l.extra_hint || '',
+        extraHintEn: l.extra_hint_en || '',
       })),
     })),
     gamePhase: getSetting('game_phase', 'lobby'),
@@ -379,19 +394,22 @@ router.post('/setup', requireGate, requireAdmin, (req, res) => {
   db.prepare('DELETE FROM location_guesses').run();
   db.prepare('DELETE FROM locations').run();
   const insertLoc = db.prepare(`
-    INSERT INTO locations (team_id, stage_order, name, hint, guess_answer, task, admin_note, extra_hint)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO locations (team_id, stage_order, name, hint, hint_en, guess_answer, task, task_en, admin_note, extra_hint, extra_hint_en)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   teams.forEach((t, teamIndex) => {
     const teamId = teamIds[teamIndex];
     t.locations.forEach((l, i) => {
       const name = (l.name || `Location ${i + 1}`).trim().slice(0, 60);
       const hint = (l.hint || '').trim().slice(0, 500);
+      const hintEn = (l.hintEn || '').trim().slice(0, 500) || null;
       const guessAnswer = (l.guessAnswer || '').trim().slice(0, 300);
       const task = (l.task || '').trim().slice(0, 500);
+      const taskEn = (l.taskEn || '').trim().slice(0, 500) || null;
       const adminNote = (l.adminNote || '').trim().slice(0, 500) || null;
       const extraHint = (l.extraHint || '').trim().slice(0, 500) || null;
-      insertLoc.run(teamId, i, name, hint, guessAnswer, task, adminNote, extraHint);
+      const extraHintEn = (l.extraHintEn || '').trim().slice(0, 500) || null;
+      insertLoc.run(teamId, i, name, hint, hintEn, guessAnswer, task, taskEn, adminNote, extraHint, extraHintEn);
     });
   });
 
