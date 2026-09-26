@@ -101,7 +101,14 @@
           select.appendChild(opt);
         });
       }
-    } catch (e) { /* gate screen will handle a gate/auth failure */ }
+    } catch (e) {
+      if (e.data?.error === 'gate_required') return; // gate screen will handle this
+      $('join-empty-note').classList.add('hidden');
+      $('player-name-select').classList.add('hidden');
+      $('join-submit').disabled = true;
+      $('join-error').textContent = `Couldn't load the name list (${e.data?.error || e.message || 'unknown error'}) — try refreshing.`;
+      $('join-error').classList.remove('hidden');
+    }
   }
 
   $('join-submit').addEventListener('click', async () => {
