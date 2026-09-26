@@ -64,11 +64,6 @@
       <div class="trail" id="trail"></div>
       <button class="btn-secondary hidden" id="game-leaderboard-link" style="margin-bottom:14px;">Peep the standings</button>
 
-      <div id="finished-view" class="finish-banner hidden">
-        <div class="display">🏁 That's a wrap!</div>
-        <p class="muted" id="finished-note">Your squad hit every spot on the list. Head back to base and celebrate — you earned it.</p>
-      </div>
-
       <div id="active-view">
         <div class="hint-box">
           <div class="loc-name" id="loc-name">SPOT</div>
@@ -105,6 +100,37 @@
             </label>
             <div class="error-text hidden" id="submit-error"></div>
             <button class="btn-primary" id="submit-btn" disabled>Send it in</button>
+            <p class="muted" style="margin-top:10px;font-size:0.82rem;">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
+          </div>
+        </div>
+
+        <!-- GATE PHASE: finished all regular locations, locked for a bit before the bonus round -->
+        <div id="gate-area" class="hidden">
+          <div class="hint-box task-box">
+            <div class="loc-name">HOLD UP</div>
+            <div class="hint-text">Ah Ah We Aint Done Yet</div>
+          </div>
+          <p class="muted">Ayyy mans figured it all out. Sayin mans are big brain, ahlie. But the game aint done yet...</p>
+          <button class="btn-secondary" id="gate-continue-btn" disabled>Continue</button>
+        </div>
+
+        <!-- FINAL PHASE: the bonus "find the host" round — approving this one ends the whole hunt -->
+        <div id="final-area" class="hidden">
+          <div class="hint-box task-box">
+            <div class="loc-name">BONUS ROUND</div>
+            <div class="hint-text">FIND ME YUH EEDIYATS</div>
+          </div>
+
+          <div id="final-status-area"></div>
+
+          <div id="final-media-area">
+            <label class="photo-picker" id="final-photo-picker">
+              <span id="final-photo-picker-text">Tap to snap or grab a pic/video</span>
+              <img id="final-photo-preview" class="hidden">
+              <input type="file" accept="image/*,video/*" capture="environment" id="final-photo-input">
+            </label>
+            <div class="error-text hidden" id="final-submit-error"></div>
+            <button class="btn-primary" id="final-submit-btn" disabled>Send it in</button>
             <p class="muted" style="margin-top:10px;font-size:0.82rem;">Upload being mad slow? Fire it into the WhatsApp group instead and get an admin to push you through.</p>
           </div>
         </div>

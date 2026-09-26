@@ -35,6 +35,11 @@
   <!-- DASHBOARD -->
   <section id="screen-dashboard" class="hidden">
 
+    <div class="card hidden" id="winner-banner">
+      <h2 style="margin-bottom:4px;" id="winner-banner-title"></h2>
+      <p class="muted">The hunt has ended for both teams.</p>
+    </div>
+
     <div class="card" id="lobby-card">
       <h2 style="margin-bottom:6px;">Lobby</h2>
       <p class="muted" id="lobby-mode-text"></p>
@@ -46,7 +51,9 @@
         <input type="checkbox" id="leaderboard-toggle" style="width:auto;margin:0;">
         Show players a shared leaderboard (rough progress only, no hints or photos)
       </label>
-      <button class="btn-secondary" id="open-setup-btn" style="margin-top:14px;">⚙️ Game Setup</button>
+      <button class="btn-secondary" id="notify-btn" style="margin-top:14px;">🔔 Enable notifications for new submissions</button>
+      <button class="btn-secondary" id="open-setup-btn" style="margin-top:10px;">⚙️ Game Setup</button>
+      <button class="btn-secondary" id="open-gallery-btn" style="margin-top:10px;">📸 Photo archive (every submission)</button>
     </div>
 
     <div class="card">
@@ -60,12 +67,28 @@
       <div id="pending-list"></div>
     </div>
 
+    <div class="card hidden" id="pending-final-card">
+      <h2 style="margin-bottom:6px;">🏁 Final round submissions</h2>
+      <p class="muted" style="margin-bottom:14px;">Approving one of these ends the hunt immediately for <strong>both</strong> teams.</p>
+      <div id="pending-final-list"></div>
+    </div>
+
     <div class="card">
       <h2 style="margin-bottom:14px;">Activity feed</h2>
       <div id="activity-list"></div>
     </div>
 
     <button class="logout-link" id="logout-btn">Log out of admin</button>
+  </section>
+
+  <!-- PHOTO ARCHIVE: every submission ever made, any status, both rounds -->
+  <section id="screen-gallery" class="hidden">
+    <div class="card">
+      <h2 style="margin-bottom:4px;">Photo archive</h2>
+      <p class="muted">Every photo/video ever submitted, approved or not — nothing gets deleted.</p>
+    </div>
+    <div id="gallery-list"></div>
+    <button class="logout-link" id="gallery-back-btn">← Back to dashboard</button>
   </section>
 
   <!-- SETUP -->

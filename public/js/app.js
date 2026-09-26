@@ -169,17 +169,32 @@
     return showOnly('screen-waiting-room');
   }
 
-  // ---- GAME (guess the spot, then complete the task) ----
+  // ---- GAME (guess the spot, then complete the task, then the gate, then the bonus round) ----
   let selectedFile = null;
+  let finalSelectedFile = null;
+  let gateCountdownTimer = null;
 
   async function loadGameState() {
     const state = await api('/api/player/state');
     renderGame(state);
   }
 
+  // Rendered into any status-area for a rejection — loud on purpose (item 2:
+  // players need to actually notice, not just see a muted grey pill).
+  function rejectedAlertHtml(note) {
+    const shown = note ? escapeHtml(note) : 'No reason given';
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 200]);
+    return `<div class="rejected-alert">
+      <span class="rejected-emoji">🚫</span>
+      <div class="rejected-title">NAH FAM, REJECTED</div>
+      <div class="rejected-note">${shown}. Run it back!</div>
+    </div>`;
+  }
+
   function renderGame(state) {
     $('game-title').textContent = state.gameTitle;
     $('game-leaderboard-link').classList.toggle('hidden', !cachedLeaderboardEnabled);
+    clearInterval(gateCountdownTimer);
 
     const trail = $('trail');
     trail.innerHTML = '';
@@ -190,14 +205,16 @@
     }
     $('trail-label').textContent = `${Math.min(state.progress, state.total)} of ${state.total} bagged`;
 
-    if (state.finished || !state.location) {
-      $('active-view').classList.add('hidden');
-      $('finished-view').classList.remove('hidden');
-      return;
-    }
-    $('finished-view').classList.add('hidden');
-    $('active-view').classList.remove('hidden');
+    $('guess-area').classList.add('hidden');
+    $('task-area').classList.add('hidden');
+    $('gate-area').classList.add('hidden');
+    $('final-area').classList.add('hidden');
+    $('extra-hint-area').classList.add('hidden');
 
+    if (state.phase === 'gate') return renderGate(state);
+    if (state.phase === 'final') return renderFinal(state);
+
+    // 'guessing' or 'task'
     $('loc-name').textContent = `SPOT ${state.progress + 1} OF ${state.total}`;
     $('hint-text').textContent = state.location.hint;
 
@@ -211,8 +228,6 @@
         $('extra-hint-btn').classList.remove('hidden');
         $('extra-hint-text').classList.add('hidden');
       }
-    } else {
-      $('extra-hint-area').classList.add('hidden');
     }
 
     const guessing = state.phase === 'guessing';
@@ -233,12 +248,58 @@
     if (state.pendingCount > 0) {
       statusArea.innerHTML = `<div class="status-pill status-pending">${state.pendingCount} submission${state.pendingCount > 1 ? 's' : ''} waiting on admin review…</div>`;
     } else if (state.lastRejectedNote !== null) {
-      const note = state.lastRejectedNote ? escapeHtml(state.lastRejectedNote) : 'No reason given';
-      statusArea.innerHTML = `<div class="status-pill status-rejected">Rejected — ${note}. Try again!</div>`;
+      statusArea.innerHTML = rejectedAlertHtml(state.lastRejectedNote);
     }
 
     resetPhotoPicker();
     $('submit-btn').textContent = state.pendingCount > 0 ? 'Send another attempt' : 'Send it in';
+  }
+
+  // ---- GATE: "Ah Ah We Aint Done Yet" — locked for GATE_WAIT_SECONDS after
+  // finishing the regular locations, timed against the server's own
+  // timestamp so a refresh resumes the countdown instead of restarting it. ----
+  function renderGate(state) {
+    $('gate-area').classList.remove('hidden');
+    const btn = $('gate-continue-btn');
+
+    function tick() {
+      const remainingMs = (state.gateReadyAt || 0) - Date.now();
+      if (remainingMs <= 0) {
+        clearInterval(gateCountdownTimer);
+        btn.disabled = false;
+        btn.textContent = 'Continue';
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = `Continue (${Math.ceil(remainingMs / 1000)})`;
+    }
+
+    tick();
+    gateCountdownTimer = setInterval(tick, 250);
+  }
+
+  $('gate-continue-btn').addEventListener('click', async () => {
+    $('gate-continue-btn').disabled = true;
+    try {
+      await api('/api/game/continue-to-final', { method: 'POST' });
+      await loadGameState();
+    } catch (e) {
+      await loadGameState(); // timer wasn't actually up yet — re-render to resync the countdown
+    }
+  });
+
+  // ---- FINAL: the "FIND ME YUH EEDIYATS" bonus round ----
+  function renderFinal(state) {
+    $('final-area').classList.remove('hidden');
+    const statusArea = $('final-status-area');
+    statusArea.innerHTML = '';
+    if (state.pendingCount > 0) {
+      statusArea.innerHTML = `<div class="status-pill status-pending">${state.pendingCount} submission${state.pendingCount > 1 ? 's' : ''} waiting on admin review…</div>`;
+    } else if (state.lastRejectedNote !== null) {
+      statusArea.innerHTML = rejectedAlertHtml(state.lastRejectedNote);
+    }
+    resetFinalPhotoPicker();
+    $('final-submit-btn').textContent = state.pendingCount > 0 ? 'Send another attempt' : 'Send it in';
   }
 
   // ---- GUESSING ----
@@ -306,6 +367,56 @@
     }
   });
 
+  // ---- FINAL ROUND photo picker — same pattern as the regular one, posting
+  // to /api/player/submit-final instead. ----
+  function resetFinalPhotoPicker() {
+    finalSelectedFile = null;
+    $('final-photo-input').value = '';
+    $('final-photo-preview').classList.add('hidden');
+    $('final-photo-picker-text').textContent = 'Tap to snap or grab a pic/video';
+    $('final-submit-btn').disabled = true;
+    $('final-submit-error').classList.add('hidden');
+  }
+
+  $('final-photo-input').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    finalSelectedFile = file;
+    $('final-photo-picker-text').textContent = file.name;
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        $('final-photo-preview').src = ev.target.result;
+        $('final-photo-preview').classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+    } else {
+      $('final-photo-preview').classList.add('hidden');
+    }
+    $('final-submit-btn').disabled = false;
+  });
+
+  $('final-submit-btn').addEventListener('click', async () => {
+    if (!finalSelectedFile) return;
+    $('final-submit-error').classList.add('hidden');
+    $('final-submit-btn').disabled = true;
+    const originalLabel = $('final-submit-btn').textContent;
+    $('final-submit-btn').textContent = 'Sending…';
+    try {
+      const form = new FormData();
+      form.append('media', finalSelectedFile);
+      await api('/api/player/submit-final', { method: 'POST', body: form, isForm: true });
+      await loadGameState();
+    } catch (e) {
+      $('final-submit-error').textContent = e.data?.error === 'invalid_media'
+        ? "That's not a pic or video, bud — try again."
+        : "Didn't go through — try again.";
+      $('final-submit-error').classList.remove('hidden');
+      $('final-submit-btn').disabled = false;
+      $('final-submit-btn').textContent = originalLabel;
+    }
+  });
+
   // ---- WRONG PLAYER PICKED: free up the name and go back to the dropdown ----
   $('wr-switch-player-link').addEventListener('click', async () => {
     if (!confirm("Switch to a different name? This'll free up your current name for someone else to grab.")) return;
@@ -369,11 +480,15 @@
   async function loadRecap() {
     try {
       const data = await api('/api/game/recap');
-      $('recap-title').textContent = `🏆 ${data.teamName}`;
+      $('recap-title').textContent = data.isWinner
+        ? 'Jeeeezz! Big up to the winners'
+        : `Ah, ${data.winningTeamName || 'the other squad'} found the host first!`;
 
       const others = data.allTeamFinishes.filter((t) => t.name !== data.teamName);
-      const finishedOthers = others.filter((t) => t.finished && t.totalSeconds != null);
-      let summary = `You wrapped it up in ${formatDuration(data.totalSeconds)}, popping ${data.hintsUsed} extra hint${data.hintsUsed === 1 ? '' : 's'} along the way.`;
+      const finishedOthers = others.filter((t) => t.finishedRegular && t.totalSeconds != null);
+      let summary = data.totalSeconds != null
+        ? `${data.teamName} wrapped up their locations in ${formatDuration(data.totalSeconds)}, popping ${data.hintsUsed} extra hint${data.hintsUsed === 1 ? '' : 's'} along the way.`
+        : `${data.teamName} didn't finish their locations before the hunt ended, popping ${data.hintsUsed} extra hint${data.hintsUsed === 1 ? '' : 's'} along the way.`;
       if (finishedOthers.length && data.totalSeconds != null) {
         const diffs = finishedOthers.map((t) => `${t.name} in ${formatDuration(t.totalSeconds)} (${t.hintsUsed} hint${t.hintsUsed === 1 ? '' : 's'})`);
         summary += ` (${diffs.join(', ')})`;
@@ -391,12 +506,16 @@
 
       const mediaEl = $('recap-media');
       mediaEl.innerHTML = '';
-      if (!data.media.length) {
+      const allMedia = [
+        ...data.media.map((m) => ({ ...m, src: `/api/player/media/${m.id}` })),
+        ...data.finalMedia.map((m) => ({ ...m, src: `/api/player/final-media/${m.id}` })),
+      ];
+      if (!allMedia.length) {
         mediaEl.innerHTML = '<p class="muted">No pics or vids got approved, unfortunately.</p>';
       }
-      data.media.forEach((m) => {
+      allMedia.forEach((m) => {
         const el = document.createElement(m.media_kind === 'video' ? 'video' : 'img');
-        el.src = `/api/player/media/${m.id}`;
+        el.src = m.src;
         if (m.media_kind === 'video') el.controls = true;
         el.style.width = '100%';
         el.style.marginBottom = '10px';

@@ -1,5 +1,5 @@
 const express = require('express');
-const { db, getSetting, logActivity, advanceTeamStage } = require('../db');
+const { db, getSetting, logActivity, GATE_WAIT_SECONDS } = require('../db');
 const { requireGate, requirePlayer, requireTeam } = require('../middleware/auth');
 
 const router = express.Router();
@@ -105,6 +105,30 @@ router.post('/guess', requireGate, requirePlayer, requireTeam, (req, res) => {
   res.json({ ok: true, locationName: location.name, task: location.task });
 });
 
+// ---- Leave the "Ah Ah We Aint Done Yet" gate once the wait is up, unlocking
+// the final "find the host" bonus round. Timed server-side, not by trusting
+// whatever the client's own countdown says. ----
+router.post('/continue-to-final', requireGate, requirePlayer, requireTeam, (req, res) => {
+  const team = teamRow(req.teamId);
+  const total = totalLocationsFor(team.id);
+  if (team.current_stage !== total || !team.finished_regular_at) {
+    return res.status(400).json({ error: 'not_at_gate' });
+  }
+
+  const elapsedMs = Date.now() - new Date(team.finished_regular_at.replace(' ', 'T') + 'Z').getTime();
+  const remainingMs = GATE_WAIT_SECONDS * 1000 - elapsedMs;
+  if (remainingMs > 0) {
+    return res.status(403).json({ error: 'timer_not_done', remainingMs });
+  }
+
+  db.prepare('UPDATE teams SET current_stage = current_stage + 1 WHERE id = ?').run(team.id);
+  logActivity('game', `${team.name} unlocked the final challenge`, team.id);
+  const io = req.app.get('io');
+  io.to(`team-${team.id}`).emit('state-changed');
+  io.to('admins').emit('admin-activity');
+  res.json({ ok: true });
+});
+
 // ---- Teams naming themselves — open until the hunt actually starts ----
 router.post('/rename-team', requireGate, requirePlayer, requireTeam, (req, res) => {
   if (getSetting('game_phase', 'lobby') !== 'lobby') {
@@ -136,9 +160,8 @@ router.get('/leaderboard', requireGate, requirePlayer, (req, res) => {
 
 // ---- Post-game recap: this team's stage-by-stage times + approved media, plus a finish comparison ----
 router.get('/recap', requireGate, requirePlayer, requireTeam, (req, res) => {
+  if (getSetting('game_phase') !== 'ended') return res.status(400).json({ error: 'not_finished' });
   const team = teamRow(req.teamId);
-  const total = totalLocationsFor(team.id);
-  if (team.current_stage < total) return res.status(400).json({ error: 'not_finished' });
 
   const startedAt = getSetting('hunt_started_at');
   const completions = db.prepare(
@@ -164,22 +187,38 @@ router.get('/recap', requireGate, requirePlayer, requireTeam, (req, res) => {
   const media = db.prepare(
     `SELECT id, media_kind FROM submissions WHERE team_id = ? AND status = 'approved' ORDER BY id ASC`
   ).all(team.id);
+  const finalMedia = db.prepare(
+    `SELECT id, media_kind FROM final_submissions WHERE team_id = ? AND status = 'approved' ORDER BY id ASC`
+  ).all(team.id);
 
   const allTeamFinishes = teams().map((t) => {
     const finishRow = db.prepare(
       `SELECT sc.completed_at FROM stage_completions sc WHERE sc.team_id = ? ORDER BY sc.id DESC LIMIT 1`
     ).get(t.id);
     const tTotal = totalLocationsFor(t.id);
-    const finished = t.current_stage >= tTotal;
+    const finishedRegular = t.current_stage >= tTotal;
     return {
       name: t.name,
-      finished,
-      totalSeconds: finished && startedAt && finishRow ? Math.round((toMs(finishRow.completed_at) - toMs(startedAt)) / 1000) : null,
+      finishedRegular,
+      totalSeconds: finishedRegular && startedAt && finishRow ? Math.round((toMs(finishRow.completed_at) - toMs(startedAt)) / 1000) : null,
       hintsUsed: db.prepare('SELECT COUNT(*) AS c FROM hint_requests WHERE team_id = ?').get(t.id).c,
     };
   });
 
-  res.json({ teamName: team.name, totalSeconds, splits, hintsUsed, media, allTeamFinishes });
+  const winningTeamId = Number(getSetting('winning_team_id') || 0) || null;
+  const winningTeam = winningTeamId ? teamRow(winningTeamId) : null;
+
+  res.json({
+    teamName: team.name,
+    totalSeconds,
+    splits,
+    hintsUsed,
+    media,
+    finalMedia,
+    allTeamFinishes,
+    isWinner: winningTeamId === team.id,
+    winningTeamName: winningTeam ? winningTeam.name : null,
+  });
 });
 
 module.exports = { router, tryAutoPlace };

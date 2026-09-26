@@ -81,14 +81,74 @@
     location.reload();
   });
 
+  // ---- Notifications (item 3): a beep + optional OS notification + a
+  // flashing tab title, so the admin doesn't have to keep this tab focused
+  // to know a submission or other update just came in. ----
+  let notificationsEnabled = false;
+  let titleFlashTimer = null;
+  const BASE_TITLE = document.title;
+
+  $('notify-btn').addEventListener('click', () => {
+    if (!('Notification' in window)) { alert("This browser doesn't support notifications."); return; }
+    Notification.requestPermission().then((perm) => {
+      notificationsEnabled = perm === 'granted';
+      $('notify-btn').textContent = notificationsEnabled ? '🔔 Notifications on' : "Couldn't enable — check your browser's site settings";
+    });
+  });
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } catch (e) { /* no Web Audio support — silently skip the beep */ }
+  }
+
+  function flashTitle(text) {
+    clearInterval(titleFlashTimer);
+    let showingAlert = true;
+    document.title = text;
+    titleFlashTimer = setInterval(() => {
+      document.title = showingAlert ? BASE_TITLE : text;
+      showingAlert = !showingAlert;
+    }, 1200);
+    const stop = () => {
+      clearInterval(titleFlashTimer);
+      document.title = BASE_TITLE;
+      window.removeEventListener('focus', stop);
+    };
+    window.addEventListener('focus', stop);
+  }
+
+  function notify(title, body) {
+    beep();
+    flashTitle(`🔔 ${title}`);
+    if (notificationsEnabled && document.hidden) {
+      try { new Notification(title, { body }); } catch (e) { /* ignore */ }
+    }
+  }
+
   let socket = null;
   function connectSocket() {
     if (socket) return;
     socket = io({ path: '/socket.io' });
-    socket.on('new-submission', loadOverview);
+    socket.on('new-submission', (data) => {
+      notify(
+        data.isFinal ? `🏁 FINAL submission — ${data.teamName}` : `New submission — ${data.teamName}`,
+        `${data.submittedBy || 'Someone'} — ${data.locationName}`
+      );
+      loadOverview();
+    });
     socket.on('submission-reviewed', loadOverview);
-    socket.on('admin-activity', loadOverview);
-    socket.on('game-state-changed', loadOverview);
+    socket.on('admin-activity', () => { notify('Update', 'Something happened — check the dashboard.'); loadOverview(); });
+    socket.on('game-state-changed', () => { notify('Update', 'Game state changed.'); loadOverview(); });
   }
 
   async function loadOverview() {
@@ -96,12 +156,20 @@
     renderLobby(data);
     renderTeams(data.teams);
     renderPending(data.pending);
+    renderPendingFinal(data.pendingFinal);
     renderActivity(data.activity);
   }
 
   function renderLobby(data) {
     $('lobby-mode-text').textContent = `Teams are admin-assigned via the roster on the Setup page${data.gamePhase === 'active' ? ' · Hunt in progress' : data.gamePhase === 'ended' ? ' · Hunt ended' : ' · In the lobby'}`;
     $('leaderboard-toggle').checked = !!data.leaderboardEnabled;
+
+    if (data.gamePhase === 'ended' && data.winningTeamName) {
+      $('winner-banner-title').textContent = `🏆 ${data.winningTeamName} found the host and won!`;
+      show('winner-banner');
+    } else {
+      hide('winner-banner');
+    }
 
     const unassignedEl = $('unassigned-area');
     unassignedEl.innerHTML = '';
@@ -163,7 +231,16 @@
       const membersText = t.members.map((m) => escapeHtml(m.name)).join(', ') || 'No one yet';
       const quietNote = (t.quietMinutes != null && t.quietMinutes >= 15)
         ? `<p class="muted" style="margin-top:6px;">⚠️ Hasn't checked in for ${t.quietMinutes} minutes — might be worth a nudge.</p>` : '';
-      const phaseNote = t.currentPhase === 'guessing' ? 'guessing the spot' : t.currentPhase === 'task' ? 'on the task' : '';
+      const onRegularLocation = t.currentPhase === 'guessing' || t.currentPhase === 'task';
+      let progressLine;
+      if (t.currentPhase === 'gate') {
+        progressLine = `Finished all ${t.total} locations — waiting out the gate timer`;
+      } else if (t.currentPhase === 'final') {
+        progressLine = `On the 🏁 FINAL bonus round`;
+      } else {
+        const phaseNote = t.currentPhase === 'guessing' ? 'guessing the spot' : t.currentPhase === 'task' ? 'on the task' : '';
+        progressLine = `On location ${t.progress + 1} of ${t.total}: ${escapeHtml(t.currentLocation ? t.currentLocation.name : '—')}${phaseNote ? ` (${phaseNote})` : ''}`;
+      }
       div.innerHTML = `
         <div class="row">
           <h3>${escapeHtml(t.name)}</h3>
@@ -171,11 +248,10 @@
         </div>
         <p class="muted" style="margin-top:4px;">${membersText}</p>
         <p class="muted" style="margin-top:6px;">
-          ${t.finished ? 'Finished the hunt 🏁' : `On location ${t.progress + 1} of ${t.total}: ${escapeHtml(t.currentLocation ? t.currentLocation.name : '—')}${phaseNote ? ` (${phaseNote})` : ''}`}
-          — 💡 ${t.hintsUsed} hint${t.hintsUsed === 1 ? '' : 's'} used
+          ${progressLine} — 💡 ${t.hintsUsed} hint${t.hintsUsed === 1 ? '' : 's'} used
         </p>
         ${quietNote}
-        ${!t.finished ? `<button class="btn-secondary advance-btn" data-team="${t.id}" data-name="${escapeHtml(t.name)}" style="margin-top:8px;">Manually advance (WhatsApp backup)</button>` : ''}`;
+        ${onRegularLocation ? `<button class="btn-secondary advance-btn" data-team="${t.id}" data-name="${escapeHtml(t.name)}" style="margin-top:8px;">Manually advance (WhatsApp backup)</button>` : ''}`;
       el.appendChild(div);
     });
 
@@ -238,6 +314,48 @@
     });
   }
 
+  function renderPendingFinal(pendingFinal) {
+    const card = $('pending-final-card');
+    const el = $('pending-final-list');
+    if (!pendingFinal.length) { hide(card); el.innerHTML = ''; return; }
+    show(card);
+    el.innerHTML = '';
+    pendingFinal.forEach((s) => {
+      const div = document.createElement('div');
+      div.className = 'submission-card';
+      const media = s.media_kind === 'video'
+        ? `<video src="/api/admin/final-image/${s.id}" controls playsinline></video>`
+        : `<img src="/api/admin/final-image/${s.id}" loading="lazy" alt="Final submission">`;
+      div.innerHTML = `
+        <div class="submission-meta"><strong>${escapeHtml(s.teamName)}</strong> — FINAL CHALLENGE</div>
+        <div class="submission-meta">Submitted by ${escapeHtml(s.playerName || 'unknown')}</div>
+        ${media}
+        <div class="submission-actions">
+          <button class="btn-approve" data-id="${s.id}" data-decision="approve">Approve — END THE HUNT</button>
+          <button class="btn-danger" data-id="${s.id}" data-decision="reject">Reject</button>
+        </div>`;
+      el.appendChild(div);
+    });
+
+    el.querySelectorAll('button[data-decision]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const decision = btn.dataset.decision;
+        if (decision === 'approve' && !confirm('This ends the hunt RIGHT NOW for both teams — are you sure this is really the host?')) return;
+        let note = '';
+        if (decision === 'reject') note = prompt('Optional note for the team (why it was rejected):', '') || '';
+        btn.closest('.submission-card').querySelectorAll('button').forEach((b) => (b.disabled = true));
+        try {
+          await api(`/api/admin/review-final/${id}`, { method: 'POST', body: JSON.stringify({ decision, note }) });
+          await loadOverview();
+        } catch (e) {
+          alert('Could not save that decision — try again.');
+          await loadOverview();
+        }
+      });
+    });
+  }
+
   function renderActivity(items) {
     const el = $('activity-list');
     el.innerHTML = '';
@@ -249,6 +367,43 @@
       const div = document.createElement('div');
       div.className = 'submission-meta';
       div.textContent = `${a.ts.split(' ')[1] || a.ts} — ${a.message}`;
+      el.appendChild(div);
+    });
+  }
+
+  // ============ PHOTO ARCHIVE (item 1: every submission, any status) ============
+  $('open-gallery-btn').addEventListener('click', async () => {
+    hide('screen-dashboard');
+    await loadGallery();
+    show('screen-gallery');
+  });
+  $('gallery-back-btn').addEventListener('click', async () => {
+    hide('screen-gallery');
+    await loadOverview();
+    show('screen-dashboard');
+  });
+
+  async function loadGallery() {
+    const data = await api('/api/admin/gallery');
+    const el = $('gallery-list');
+    el.innerHTML = '';
+    if (!data.submissions.length) {
+      el.innerHTML = '<div class="card"><div class="empty-state">No submissions yet.</div></div>';
+      return;
+    }
+    data.submissions.forEach((s) => {
+      const div = document.createElement('div');
+      div.className = 'card';
+      const src = s.kind === 'final' ? `/api/admin/final-image/${s.id}` : `/api/admin/image/${s.id}`;
+      const media = s.media_kind === 'video'
+        ? `<video src="${src}" controls playsinline></video>`
+        : `<img src="${src}" loading="lazy" alt="Submission">`;
+      const statusClass = s.status === 'approved' ? 'status-approved' : s.status === 'pending' ? 'status-pending' : '';
+      div.innerHTML = `
+        <div class="submission-meta"><strong>${escapeHtml(s.teamName)}</strong> — ${escapeHtml(s.locationName)}</div>
+        <div class="submission-meta">By ${escapeHtml(s.playerName || 'unknown')} · ${escapeHtml(s.submitted_at)}</div>
+        <span class="status-pill ${statusClass}">${escapeHtml(s.status)}</span>
+        ${media}`;
       el.appendChild(div);
     });
   }

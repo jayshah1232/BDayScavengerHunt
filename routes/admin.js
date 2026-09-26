@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
-const { db, getSetting, setSetting, logActivity, advanceTeamStage, minutesSinceLastPlayerActivity, resetGameProgress } = require('../db');
+const { db, getSetting, setSetting, logActivity, advanceTeamStage, endGame, minutesSinceLastPlayerActivity, resetGameProgress } = require('../db');
 const { requireGate, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
@@ -41,23 +41,25 @@ router.post('/logout', requireGate, (req, res) => {
 router.get('/overview', requireGate, requireAdmin, (req, res) => {
   const teams = db.prepare('SELECT * FROM teams ORDER BY id').all().map((t) => {
     const total = db.prepare('SELECT COUNT(*) AS c FROM locations WHERE team_id = ?').get(t.id).c;
-    const currentLocation = t.current_stage < total
-      ? db.prepare('SELECT id, name FROM locations WHERE team_id = ? AND stage_order = ?').get(t.id, t.current_stage)
-      : null;
-    const currentPhase = currentLocation
-      ? (db.prepare('SELECT 1 FROM location_guesses WHERE team_id = ? AND location_id = ?').get(t.id, currentLocation.id) ? 'task' : 'guessing')
-      : null;
+    let currentLocation = null;
+    let currentPhase = null;
+    if (t.current_stage < total) {
+      currentLocation = db.prepare('SELECT id, name FROM locations WHERE team_id = ? AND stage_order = ?').get(t.id, t.current_stage);
+      currentPhase = db.prepare('SELECT 1 FROM location_guesses WHERE team_id = ? AND location_id = ?').get(t.id, currentLocation.id) ? 'task' : 'guessing';
+    } else if (total > 0 && t.current_stage === total) {
+      currentPhase = 'gate';
+    } else if (total > 0) {
+      currentPhase = 'final';
+    }
     return {
       id: t.id,
       name: t.name,
       progress: t.current_stage,
       total,
-      finished: total > 0 && t.current_stage >= total,
       currentLocation,
       currentPhase,
       members: db.prepare('SELECT id, name FROM players WHERE team_id = ? ORDER BY name ASC').all(t.id),
-      quietMinutes: (getSetting('game_phase') === 'active' && t.current_stage < total)
-        ? minutesSinceLastPlayerActivity(t.id) : null,
+      quietMinutes: getSetting('game_phase') === 'active' ? minutesSinceLastPlayerActivity(t.id) : null,
       hintsUsed: db.prepare('SELECT COUNT(*) AS c FROM hint_requests WHERE team_id = ?').get(t.id).c,
     };
   });
@@ -75,6 +77,15 @@ router.get('/overview', requireGate, requireAdmin, (req, res) => {
      ORDER BY s.submitted_at ASC`
   ).all();
 
+  const pendingFinal = db.prepare(
+    `SELECT fs.id, fs.filename, fs.media_kind, fs.submitted_at, t.id AS teamId, t.name AS teamName, p.name AS playerName
+     FROM final_submissions fs
+     JOIN teams t ON t.id = fs.team_id
+     LEFT JOIN players p ON p.id = fs.player_id
+     WHERE fs.status = 'pending'
+     ORDER BY fs.submitted_at ASC`
+  ).all();
+
   const recentReviewed = db.prepare(
     `SELECT s.id, s.status, s.reviewed_at, t.name AS teamName, l.name AS locationName
      FROM submissions s JOIN teams t ON t.id = s.team_id JOIN locations l ON l.id = s.location_id
@@ -83,9 +94,14 @@ router.get('/overview', requireGate, requireAdmin, (req, res) => {
 
   const activity = db.prepare('SELECT * FROM activity_log ORDER BY id DESC LIMIT 40').all();
 
+  const winningTeamId = Number(getSetting('winning_team_id') || 0) || null;
+  const winningTeam = winningTeamId ? db.prepare('SELECT name FROM teams WHERE id = ?').get(winningTeamId) : null;
+
   res.json({
     gamePhase: getSetting('game_phase', 'lobby'),
     leaderboardEnabled: getSetting('leaderboard_enabled') === '1',
+    winningTeamId,
+    winningTeamName: winningTeam ? winningTeam.name : null,
     teams,
     // Informational only — rosters are set ahead of time on the Setup page,
     // so there's no live "place this player" action for the admin to take.
@@ -93,14 +109,45 @@ router.get('/overview', requireGate, requireAdmin, (req, res) => {
     // player fixes it themselves from their own screen.
     unassigned,
     pending,
+    pendingFinal,
     recentReviewed,
     activity,
     canStart: teams.every((t) => t.members.length > 0 && t.total > 0),
   });
 });
 
+// ---- Photo/video archive: every submission, any status, both regular and
+// final rounds — "I'd like to save the pictures regardless of approval" ----
+router.get('/gallery', requireGate, requireAdmin, (req, res) => {
+  const regular = db.prepare(
+    `SELECT s.id, s.media_kind, s.status, s.submitted_at, 'regular' AS kind,
+            t.name AS teamName, l.name AS locationName, p.name AS playerName
+     FROM submissions s
+     JOIN teams t ON t.id = s.team_id
+     JOIN locations l ON l.id = s.location_id
+     LEFT JOIN players p ON p.id = s.player_id
+     ORDER BY s.submitted_at DESC`
+  ).all();
+  const final = db.prepare(
+    `SELECT fs.id, fs.media_kind, fs.status, fs.submitted_at, 'final' AS kind,
+            t.name AS teamName, 'FINAL CHALLENGE' AS locationName, p.name AS playerName
+     FROM final_submissions fs
+     JOIN teams t ON t.id = fs.team_id
+     LEFT JOIN players p ON p.id = fs.player_id
+     ORDER BY fs.submitted_at DESC`
+  ).all();
+  const all = [...regular, ...final].sort((a, b) => (a.submitted_at < b.submitted_at ? 1 : -1));
+  res.json({ submissions: all });
+});
+
 router.get('/image/:submissionId', requireGate, requireAdmin, (req, res) => {
   const sub = db.prepare('SELECT filename FROM submissions WHERE id = ?').get(req.params.submissionId);
+  if (!sub) return res.status(404).end();
+  res.sendFile(sub.filename, { root: path.join(__dirname, '..', 'uploads') });
+});
+
+router.get('/final-image/:submissionId', requireGate, requireAdmin, (req, res) => {
+  const sub = db.prepare('SELECT filename FROM final_submissions WHERE id = ?').get(req.params.submissionId);
   if (!sub) return res.status(404).end();
   res.sendFile(sub.filename, { root: path.join(__dirname, '..', 'uploads') });
 });
@@ -121,7 +168,7 @@ router.post('/review/:submissionId', requireGate, requireAdmin, (req, res) => {
   const location = db.prepare('SELECT * FROM locations WHERE id = ?').get(sub.location_id);
 
   if (decision === 'approve' && location && location.stage_order === team.current_stage) {
-    const { gameJustEnded } = advanceTeamStage(team.id, location.id);
+    advanceTeamStage(team.id, location.id);
     // Any other pending submission for this same now-completed stage is moot —
     // first one to be approved is the one that counts.
     db.prepare(
@@ -129,12 +176,44 @@ router.post('/review/:submissionId', requireGate, requireAdmin, (req, res) => {
        WHERE team_id = ? AND location_id = ? AND status = 'pending' AND id != ?`
     ).run(team.id, location.id, sub.id);
     logActivity('review', `Approved ${team.name}'s submission for ${location.name} — moving to next hint`, team.id);
-    if (gameJustEnded) broadcastGame(req);
   } else if (decision === 'reject') {
     logActivity('review', `Rejected ${team.name}'s submission for ${location ? location.name : 'a location'}`, team.id);
   }
 
   broadcastTeam(req, team.id);
+  req.app.get('io').to('admins').emit('admin-activity');
+  res.json({ ok: true });
+});
+
+// ---- Review a final-round ("find the host") submission. Approving one ends
+// the ENTIRE hunt for both teams immediately — this is the win condition. ----
+router.post('/review-final/:submissionId', requireGate, requireAdmin, (req, res) => {
+  const { decision, note } = req.body || {};
+  if (!['approve', 'reject'].includes(decision)) return res.status(400).json({ error: 'invalid_decision' });
+
+  const sub = db.prepare('SELECT * FROM final_submissions WHERE id = ?').get(req.params.submissionId);
+  if (!sub) return res.status(404).json({ error: 'not_found' });
+  if (sub.status !== 'pending') return res.status(409).json({ error: 'already_reviewed' });
+
+  const status = decision === 'approve' ? 'approved' : 'rejected';
+  db.prepare(`UPDATE final_submissions SET status = ?, note = ?, reviewed_at = datetime('now') WHERE id = ?`)
+    .run(status, (note || '').trim().slice(0, 300), sub.id);
+
+  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(sub.team_id);
+
+  if (decision === 'approve') {
+    // Any other pending final submission (either team) is moot now — the hunt is over.
+    db.prepare(
+      `UPDATE final_submissions SET status = 'superseded', reviewed_at = datetime('now')
+       WHERE status = 'pending' AND id != ?`
+    ).run(sub.id);
+    endGame(team.id, team.name);
+    broadcastGame(req);
+  } else {
+    logActivity('review', `Rejected ${team.name}'s final-challenge submission`, team.id);
+    broadcastTeam(req, team.id);
+  }
+
   req.app.get('io').to('admins').emit('admin-activity');
   res.json({ ok: true });
 });
@@ -151,7 +230,9 @@ router.post('/start-hunt', requireGate, requireAdmin, (req, res) => {
 // Manual stage advance — the WhatsApp/slow-upload backup path: if a team
 // sends their proof straight to the group chat instead of the app, push
 // them forward here without needing a matching submission row (skips both
-// the guess step and the task for that location).
+// the guess step and the task for that location). Only applies to the
+// regular locations — the gate wait and the final challenge don't have a
+// "skip" button, since ending the hunt only happens via review-final.
 router.post('/advance-team', requireGate, requireAdmin, (req, res) => {
   const { teamId, note } = req.body || {};
   const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
@@ -161,10 +242,9 @@ router.post('/advance-team', requireGate, requireAdmin, (req, res) => {
   if (team.current_stage >= total) return res.status(400).json({ error: 'already_finished' });
 
   const location = db.prepare('SELECT * FROM locations WHERE team_id = ? AND stage_order = ?').get(team.id, team.current_stage);
-  const { gameJustEnded } = advanceTeamStage(team.id, location.id);
+  advanceTeamStage(team.id, location.id);
   logActivity('admin', `Admin manually advanced ${team.name}${note ? ` — ${note}` : ''}`, team.id);
   broadcastTeam(req, team.id);
-  if (gameJustEnded) broadcastGame(req);
   res.json({ ok: true });
 });
 

@@ -84,7 +84,28 @@ CREATE TABLE IF NOT EXISTS location_guesses (
   guessed_at TEXT DEFAULT (datetime('now')),
   UNIQUE(team_id, location_id)
 );
+
+-- The bonus "find the host" round every team reaches after their regular
+-- locations. Not tied to a specific location row (there's only ever one of
+-- these per team) — approving any team's is what ends the whole hunt.
+CREATE TABLE IF NOT EXISTS final_submissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id INTEGER NOT NULL REFERENCES teams(id),
+  player_id INTEGER REFERENCES players(id),
+  filename TEXT NOT NULL,
+  media_kind TEXT NOT NULL DEFAULT 'image',
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected | superseded
+  note TEXT,
+  submitted_at TEXT DEFAULT (datetime('now')),
+  reviewed_at TEXT
+);
 `);
+
+// Migration: add the "gate" timer column to teams if this DB predates it.
+const teamCols2 = db.prepare('PRAGMA table_info(teams)').all().map((c) => c.name);
+if (!teamCols2.includes('finished_regular_at')) {
+  db.exec('ALTER TABLE teams ADD COLUMN finished_regular_at TEXT');
+}
 
 // Migration: teams/players used to carry draft-mode captain fields (players
 // self-selected teams via a draft or auto-roster choice). Teams are now
@@ -154,29 +175,33 @@ function logActivity(type, message, teamId = null) {
   db.prepare('INSERT INTO activity_log (type, message, team_id) VALUES (?, ?, ?)').run(type, message, teamId);
 }
 
-// The single place a team's stage ever moves forward — whether triggered by
-// an admin approving media or a manual backup override. Keeping this in one
-// function means the time-tracking record and the auto-end-game check can
-// never accidentally be skipped by one path.
+// Seconds a team must wait at the "Ah Ah We Aint Done Yet" gate (after their
+// last regular location) before the bonus final-round challenge unlocks.
+const GATE_WAIT_SECONDS = 30;
+
+// The single place a team's stage ever moves forward through their regular
+// locations — whether triggered by an admin approving media or a manual
+// backup override. If this lands them exactly on "total" (no locations
+// left), they've hit the gate — stamp when, so the wait can be timed
+// server-side regardless of what the client does.
 function advanceTeamStage(teamId, locationId) {
   db.prepare('UPDATE teams SET current_stage = current_stage + 1 WHERE id = ?').run(teamId);
   db.prepare('INSERT INTO stage_completions (team_id, location_id) VALUES (?, ?)').run(teamId, locationId);
-  const wasActive = getSetting('game_phase') === 'active';
-  maybeEndGame();
-  return { gameJustEnded: wasActive && getSetting('game_phase') === 'ended' };
+
+  const team = db.prepare('SELECT current_stage FROM teams WHERE id = ?').get(teamId);
+  const total = db.prepare('SELECT COUNT(*) AS c FROM locations WHERE team_id = ?').get(teamId).c;
+  if (team.current_stage === total) {
+    db.prepare("UPDATE teams SET finished_regular_at = datetime('now') WHERE id = ?").run(teamId);
+  }
 }
 
-function maybeEndGame() {
-  const teams = db.prepare('SELECT id, current_stage FROM teams').all();
-  if (teams.length === 0) return;
-  const stillGoing = teams.filter((t) => {
-    const total = db.prepare('SELECT COUNT(*) AS c FROM locations WHERE team_id = ?').get(t.id).c;
-    return total === 0 || t.current_stage < total;
-  });
-  if (stillGoing.length === 0 && getSetting('game_phase') === 'active') {
-    setSetting('game_phase', 'ended');
-    logActivity('game', 'All teams have finished — the hunt has ended!');
-  }
+// The hunt now only ends when someone's final-round submission is approved
+// (see routes/admin.js) — finishing regular locations just unlocks the gate
+// and then the bonus round, not the game itself.
+function endGame(winningTeamId, winningTeamName) {
+  setSetting('game_phase', 'ended');
+  setSetting('winning_team_id', String(winningTeamId));
+  logActivity('game', `${winningTeamName} found the host and won the hunt! 🏆`, winningTeamId);
 }
 
 // Minutes since this team last did anything player-driven (a correct guess or
@@ -199,15 +224,17 @@ function resetGameProgress() {
   db.prepare('DELETE FROM hint_requests').run();
   db.prepare('DELETE FROM stage_completions').run();
   db.prepare('DELETE FROM submissions').run();
+  db.prepare('DELETE FROM final_submissions').run();
   db.prepare('DELETE FROM location_guesses').run();
   db.prepare('DELETE FROM activity_log').run();
   db.prepare('DELETE FROM players').run();
-  db.prepare('UPDATE teams SET current_stage = 0').run();
-  db.prepare("DELETE FROM settings WHERE key IN ('hunt_started_at')").run();
+  db.prepare('UPDATE teams SET current_stage = 0, finished_regular_at = NULL').run();
+  db.prepare("DELETE FROM settings WHERE key IN ('hunt_started_at', 'winning_team_id')").run();
   setSetting('game_phase', 'lobby');
 }
 
 module.exports = {
   db, getSetting, setSetting, logActivity,
-  advanceTeamStage, maybeEndGame, minutesSinceLastPlayerActivity, resetGameProgress,
+  advanceTeamStage, endGame, minutesSinceLastPlayerActivity, resetGameProgress,
+  GATE_WAIT_SECONDS,
 };

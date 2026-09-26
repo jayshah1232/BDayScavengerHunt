@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { fromBuffer } = require('file-type');
-const { db, getSetting, logActivity } = require('../db');
+const { db, getSetting, logActivity, GATE_WAIT_SECONDS } = require('../db');
 const { requireGate, requirePlayer, requireTeam } = require('../middleware/auth');
 const { tryAutoPlace } = require('./game');
 
@@ -37,6 +37,21 @@ function isGuessed(teamId, locationId) {
 }
 function normalize(str) {
   return (str || '').trim().toLowerCase();
+}
+
+// Validates a file actually looks like an allowed image/video (by content,
+// not filename/browser-reported type) and writes it to uploads/ with a
+// random name. Shared by both the regular per-location submit and the
+// final-round submit. Returns null if the file isn't an allowed type.
+async function saveMediaFile(buffer) {
+  const type = await fromBuffer(buffer);
+  let kind = null;
+  if (type && ALLOWED_IMAGE.has(type.mime)) kind = 'image';
+  else if (type && ALLOWED_VIDEO.has(type.mime)) kind = 'video';
+  if (!kind) return null;
+  const filename = `${uuidv4()}${EXT_FOR[type.mime]}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, filename), buffer);
+  return { kind, filename };
 }
 
 // --- Names still up for grabs: everyone on the roster who hasn't joined yet.
@@ -97,7 +112,8 @@ router.post('/switch', requireGate, requirePlayer, (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Current game state for this player's team: hint/guess or task, progress, submission status ---
+// --- Current game state for this player's team: guess/task, the post-locations
+// gate wait, the final bonus round, or progress + submission status for any of them ---
 router.get('/state', requireGate, requirePlayer, (req, res) => {
   const playerRow = db.prepare('SELECT team_id FROM players WHERE id = ?').get(req.session.playerId);
   const teamId = playerRow ? playerRow.team_id : null;
@@ -108,14 +124,15 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
   let lastRejectedNote = null;
   let hintUsed = false;
   let total = 0;
+  let gateReadyAt = null;
 
   if (teamId) {
     team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
     if (team) {
       total = totalLocations(team.id);
-      const finished = team.current_stage >= total;
-      location = finished ? null : currentLocation(team.id, team.current_stage);
-      if (location) {
+
+      if (team.current_stage < total) {
+        location = currentLocation(team.id, team.current_stage);
         const guessed = isGuessed(team.id, location.id);
         phase = guessed ? 'task' : 'guessing';
         hintUsed = !!db.prepare(
@@ -130,6 +147,20 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
           ).get(team.id, location.id);
           lastRejectedNote = pendingCount > 0 ? null : (lastRejected ? (lastRejected.note || '') : null);
         }
+      } else if (team.current_stage === total) {
+        phase = 'gate';
+        if (team.finished_regular_at) {
+          gateReadyAt = new Date(team.finished_regular_at.replace(' ', 'T') + 'Z').getTime() + GATE_WAIT_SECONDS * 1000;
+        }
+      } else {
+        phase = 'final';
+        pendingCount = db.prepare(
+          `SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ? AND status = 'pending'`
+        ).get(team.id).c;
+        const lastRejected = db.prepare(
+          `SELECT note FROM final_submissions WHERE team_id = ? AND status = 'rejected' ORDER BY id DESC LIMIT 1`
+        ).get(team.id);
+        lastRejectedNote = pendingCount > 0 ? null : (lastRejected ? (lastRejected.note || '') : null);
       }
     }
   }
@@ -139,10 +170,10 @@ router.get('/state', requireGate, requirePlayer, (req, res) => {
     gamePhase: getSetting('game_phase', 'lobby'),
     playerName: req.session.playerName || null,
     team: team ? { id: team.id, name: team.name } : null,
-    finished: team ? team.current_stage >= total : false,
     progress: team ? team.current_stage : 0,
     total,
     phase,
+    gateReadyAt,
     location: location ? {
       hint: location.hint,
       hasExtraHint: !!location.extra_hint,
@@ -170,21 +201,15 @@ router.post('/submit', requireGate, requirePlayer, requireTeam, upload.single('m
 
     if (!req.file) return res.status(400).json({ error: 'media_required' });
 
-    const type = await fromBuffer(req.file.buffer);
-    let kind = null;
-    if (type && ALLOWED_IMAGE.has(type.mime)) kind = 'image';
-    else if (type && ALLOWED_VIDEO.has(type.mime)) kind = 'video';
-    if (!kind) return res.status(400).json({ error: 'invalid_media' });
-
-    const filename = `${uuidv4()}${EXT_FOR[type.mime]}`;
-    fs.writeFileSync(path.join(UPLOAD_DIR, filename), req.file.buffer);
+    const saved = await saveMediaFile(req.file.buffer);
+    if (!saved) return res.status(400).json({ error: 'invalid_media' });
 
     const info = db.prepare(
       `INSERT INTO submissions (team_id, location_id, player_id, filename, media_kind, status)
        VALUES (?, ?, ?, ?, ?, 'pending')`
-    ).run(team.id, location.id, req.session.playerId, filename, kind);
+    ).run(team.id, location.id, req.session.playerId, saved.filename, saved.kind);
 
-    logActivity('submission', `${req.session.playerName} submitted a ${kind} for ${location.name}`, team.id);
+    logActivity('submission', `${req.session.playerName} submitted a ${saved.kind} for ${location.name}`, team.id);
 
     const io = req.app.get('io');
     io.to('admins').emit('new-submission', {
@@ -202,11 +227,60 @@ router.post('/submit', requireGate, requirePlayer, requireTeam, upload.single('m
   }
 });
 
+// --- Submit a photo/video for the final "find the host" bonus round — only
+// reachable once a team has passed the gate. Approving this one (in the
+// admin dashboard) ends the whole hunt, for both teams, immediately. ---
+router.post('/submit-final', requireGate, requirePlayer, requireTeam, upload.single('media'), async (req, res) => {
+  try {
+    const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(req.teamId);
+    if (!team) return res.status(400).json({ error: 'no_team' });
+
+    const total = totalLocations(team.id);
+    if (team.current_stage !== total + 1) return res.status(400).json({ error: 'not_at_final' });
+
+    if (!req.file) return res.status(400).json({ error: 'media_required' });
+
+    const saved = await saveMediaFile(req.file.buffer);
+    if (!saved) return res.status(400).json({ error: 'invalid_media' });
+
+    const info = db.prepare(
+      `INSERT INTO final_submissions (team_id, player_id, filename, media_kind, status)
+       VALUES (?, ?, ?, ?, 'pending')`
+    ).run(team.id, req.session.playerId, saved.filename, saved.kind);
+
+    logActivity('submission', `${req.session.playerName} submitted the FINAL CHALLENGE photo for ${team.name}`, team.id);
+
+    const io = req.app.get('io');
+    io.to('admins').emit('new-submission', {
+      id: info.lastInsertRowid,
+      teamName: team.name,
+      locationName: 'FINAL CHALLENGE',
+      submittedBy: req.session.playerName,
+      isFinal: true,
+    });
+    io.to(`team-${team.id}`).emit('state-changed');
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('submit-final error', err);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // --- View one's own team's approved media (used by the post-game recap gallery).
 // Only approved submissions, and only if it belongs to the requester's own team. ---
 router.get('/media/:submissionId', requireGate, requirePlayer, requireTeam, (req, res) => {
   const sub = db.prepare(
     `SELECT filename FROM submissions WHERE id = ? AND team_id = ? AND status = 'approved'`
+  ).get(req.params.submissionId, req.teamId);
+  if (!sub) return res.status(404).end();
+  res.sendFile(sub.filename, { root: UPLOAD_DIR });
+});
+
+// --- Same, for the final-round bonus photo. ---
+router.get('/final-media/:submissionId', requireGate, requirePlayer, requireTeam, (req, res) => {
+  const sub = db.prepare(
+    `SELECT filename FROM final_submissions WHERE id = ? AND team_id = ? AND status = 'approved'`
   ).get(req.params.submissionId, req.teamId);
   if (!sub) return res.status(404).end();
   res.sendFile(sub.filename, { root: UPLOAD_DIR });
